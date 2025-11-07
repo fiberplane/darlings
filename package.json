@@ -1,0 +1,27 @@
+{
+  "name": "mcp-tool-optimizer",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MCP Tool Description Optimizer using GEPA algorithm",
+  "scripts": {
+    "dev": "bun run src/server.ts",
+    "build": "bun build src/ui/client.tsx --outdir=dist --target=browser --minify",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "start": "bun run src/server.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.7",
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "ai": "^5.0.89",
+    "@ai-sdk/anthropic": "^1.0.0",
+    "@ai-sdk/openai": "^1.0.0",
+    "preact": "^10.24.3",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.6",
+    "@types/bun": "latest"
+  }
+}
