@@ -1,129 +1,190 @@
+import type { InferSelectModel } from "drizzle-orm";
+import type * as schema from "./db/schema";
+import type { MODEL_PROVIDERS } from "./lib/constants";
+
 // MCP Configuration
 export type MCPConfig =
-  | { type: "stdio"; command: string; args?: string[] }
-  | { type: "http"; url: string };
+	| { type: "stdio"; command: string; args?: string[] }
+	| {
+			type: "http";
+			url: string;
+			headers?: Record<string, string>;
+	  };
 
-// Core Domain Types
+// Database row types
+export type MCPServer = InferSelectModel<typeof schema.mcpServers>;
+export type ToolRow = InferSelectModel<typeof schema.tools>;
+export type TestCaseRow = InferSelectModel<typeof schema.testCases>;
+
+// Core Domain Types - Tool
 export type Tool = {
-  id: string;
-  name: string;
-  description: string;
-  inputSchema: object;
-  serverId: string;
+	id: string;
+	name: string;
+	description: string;
+	inputSchema: Record<string, unknown>;
+	serverId: string;
 };
 
 export type TestCase = {
-  id: string;
-  toolId: string;
-  query: string;
-  expectedTool: string;
-  userCreated: boolean;
+	id: string;
+	toolId: string;
+	query: string;
+	expectedTool: string;
+	userCreated: boolean;
 };
 
 export type Candidate = {
-  id: string;
-  tools: Tool[];
+	id: string;
+	tools: Tool[];
 };
 
 export type EvaluatedCandidate = Candidate & {
-  accuracy: number;
-  avgDescriptionLength: number;
-  evaluations: EvalResult[];
+	accuracy: number;
+	avgDescriptionLength: number;
+	evaluations: EvalResult[];
 };
 
 export type EvalResult = {
-  testCaseId: string;
-  selectedTool: string | null;
-  expectedTool: string;
-  correct: boolean;
+	testCaseId: string;
+	selectedTool: string | null;
+	expectedTool: string;
+	correct: boolean;
 };
 
 // Optimization Configuration
 export type OptimizationConfig = {
-  iterations: number;          // GEPA generations (default: 10)
-  populationSize: number;      // Candidates per generation (default: 8)
-  testsPerTool: number;        // Auto-generated tests (default: 5)
-  model: ModelName;            // LLM to use
-  parallelEvals: number;       // Concurrent evaluations (default: 3)
+	maxEvaluations: number; // Total LLM call budget (default: 500)
+	subsampleSize: number; // Quick filter size (default: 5)
+	testsPerTool: number; // Auto-generated tests (default: 5)
+	model: ModelName; // LLM to use
+	maxConcurrentEvaluations: number; // Concurrent evaluations (default: 3)
 };
 
-export type ModelName =
-  // Claude models (latest)
-  | 'claude-sonnet-4-5'
-  | 'claude-sonnet-4'
-  | 'claude-opus-4-1'
-  | 'claude-haiku-4-5'
-  // OpenAI models (latest)
-  | 'gpt-5'
-  | 'gpt-5-mini'
-  | 'gpt-4o'
-  | 'o3-mini'
-  // Kimi models (Moonshot AI) - latest
-  | 'moonshot-v1-8k'
-  | 'moonshot-v1-32k'
-  | 'moonshot-v1-128k'
-  // Qwen models (Alibaba) - latest
-  | 'qwen-turbo'
-  | 'qwen-plus'
-  | 'qwen-max'
-  | 'qwen-long'
-  | 'qwq-32b-preview';
+// GEPA Configuration (replaces iterations/populationSize with budget-based approach)
+export type GEPAConfig = {
+	runId: string; // Optimization run ID
+	maxEvaluations: number; // Total LLM call budget (default: 500)
+	subsampleSize: number; // Cheap filter size (default: 5)
+	testsPerTool: number; // Auto-generated tests (same as before)
+	model: ModelName; // LLM to use
+	maxConcurrentEvaluations: number; // Rate limiting
+	tools: Tool[];
+	testCases: TestCase[];
+	onProgress: (event: ProgressEvent) => void;
+};
+
+export type ModelName = keyof typeof MODEL_PROVIDERS;
 
 // Progress Events for SSE
 export type ProgressEvent =
-  | { type: "generation_start"; generation: number }
-  | {
-      type: "candidate_start";
-      candidateId: string;
-      generation: number
-    }
-  | {
-      type: "evaluation";
-      candidateId: string;
-      testCase: string;
-      result: {
-        correct: boolean;
-        selected: string | null;
-        expected: string
-      }
-    }
-  | {
-      type: "candidate_done";
-      candidateId: string;
-      accuracy: number;
-      avgLength: number
-    }
-  | {
-      type: "pareto_front";
-      candidates: Array<{
-        id: string;
-        accuracy: number;
-        avgLength: number;
-      }>
-    }
-  | {
-      type: "mutation_start";
-      candidateId: string
-    }
-  | {
-      type: "reflection_start";
-      candidateId: string;
-      tool: string;
-      failure: {
-        query: string;
-        selected: string | null;
-        expected: string;
-      }
-    }
-  | {
-      type: "reflection_done";
-      candidateId: string;
-      tool: string;
-      oldDesc: string;
-      newDesc: string
-    }
-  | {
-      type: "generation_done";
-      generation: number;
-      bestAccuracy: number
-    };
+	| { type: "optimization_start"; runId: string }
+	| { type: "generation_start"; generation: number }
+	| {
+			type: "candidate_start";
+			candidateId: string;
+			generation?: number;
+			iteration?: number;
+	  }
+	| {
+			type: "evaluation";
+			candidateId: string;
+			testCase: string;
+			result: {
+				correct: boolean;
+				selected: string | null;
+				expected: string;
+			};
+	  }
+	| {
+			type: "candidate_done";
+			candidateId: string;
+			accuracy: number;
+			avgLength: number;
+			generation?: number;
+			toolDescriptions: Record<string, string>;
+			isPareto: boolean;
+	  }
+	| {
+			type: "pareto_front";
+			candidates: Array<{
+				id: string;
+				accuracy: number;
+				avgLength: number;
+			}>;
+	  }
+	| {
+			type: "mutation_start";
+			candidateId: string;
+	  }
+	| {
+			type: "reflection_start";
+			candidateId: string;
+			tool: string;
+			failure: {
+				query: string;
+				selected: string | null;
+				expected: string;
+			};
+	  }
+	| {
+			type: "reflection_done";
+			candidateId: string;
+			tool: string;
+			oldDesc: string;
+			newDesc: string;
+	  }
+	| {
+			type: "generation_done";
+			generation: number;
+			bestAccuracy: number;
+	  }
+	| { type: "iteration_start"; iteration: number; totalEvaluations: number }
+	| {
+			type: "parent_selected";
+			candidateId: string;
+			iteration: number;
+			dominanceCount: number;
+	  }
+	| {
+			type: "subsample_eval";
+			candidateId: string;
+			subsampleScore: number;
+			parentSubsampleScore: number;
+			subsampleSize: number;
+	  }
+	| {
+			type: "offspring_rejected";
+			candidateId: string;
+			reason: string;
+			iteration: number;
+	  }
+	| {
+			type: "offspring_accepted";
+			candidateId: string;
+			accuracy: number;
+			avgLength: number;
+			archiveIndex: number;
+			parentId: string;
+			iteration: number;
+	  }
+	| {
+			type: "archive_update";
+			archiveSize: number;
+			totalEvaluations: number;
+			acceptedCount: number;
+			rejectedCount: number;
+	  }
+	| {
+			type: "iteration_done";
+			iteration: number;
+			totalEvaluations: number;
+			archiveSize: number;
+	  }
+	| {
+			type: "optimization_complete";
+			runId: string;
+			archiveSize: number;
+			totalEvaluations: number;
+			acceptedCount: number;
+			rejectedCount: number;
+	  };
