@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db";
 import * as schema from "./db/schema";
 import { runGEPA } from "./lib/gepa";
+import { runGoldenOptimizer } from "./lib/golden-optimizer";
 import { connectMCP, listTools } from "./lib/mcp-client";
 import { MCPOAuthProvider } from "./lib/oauth-provider";
 import { generateTestCases } from "./lib/test-generator";
@@ -1430,63 +1431,252 @@ async function handleStartOptimization(
 				const startData = `data: ${JSON.stringify(startEvent)}\n\n`;
 				sendToClient(startData);
 
-				await runGEPA({
-					runId,
-					tools,
-					testCases,
-					...config,
-					onProgress: async (event: ProgressEvent) => {
-						// Check if aborted
-						if (abortController.signal.aborted) {
-							if (clientConnected) {
-								try {
-									controller.close();
-								} catch {
-									// Already closed
+				// Choose optimizer based on config
+				if (config.optimizer === "golden") {
+					await runGoldenOptimizer({
+						runId,
+						tools,
+						model: config.model,
+						maxConcurrentEvaluations: config.maxConcurrentEvaluations,
+						testCasesPerCategory: config.testCasesPerCategory || 10,
+						candidateCount: config.candidateCount || 10,
+						onProgress: async (event: ProgressEvent) => {
+							// Check if aborted
+							if (abortController.signal.aborted) {
+								if (clientConnected) {
+									try {
+										controller.close();
+									} catch {
+										// Already closed
+									}
 								}
+								return;
 							}
-							return;
-						}
 
-						// Send event to client (non-blocking if disconnected)
-						const data = `data: ${JSON.stringify(event)}\n\n`;
-						sendToClient(data);
+							// Send event to client (non-blocking if disconnected)
+							const data = `data: ${JSON.stringify(event)}\n\n`;
+							sendToClient(data);
 
-						// Save to DB for replay (await to ensure persistence)
-						await db.insert(schema.events).values({
-							id: crypto.randomUUID(),
-							runId,
-							timestamp: new Date(),
-							event: JSON.stringify(event),
-						});
-
-						// Persist candidate data
-						if (event.type === "candidate_done") {
-							await db.insert(schema.candidates).values({
-								id: event.candidateId,
+							// Save to DB for replay (await to ensure persistence)
+							await db.insert(schema.events).values({
+								id: crypto.randomUUID(),
 								runId,
-								generation: event.generation,
-								toolDescriptions: JSON.stringify(event.toolDescriptions),
-								accuracy: event.accuracy,
-								avgDescriptionLength: event.avgLength,
-								isPareto: event.isPareto,
+								timestamp: new Date(),
+								event: JSON.stringify(event),
 							});
-						}
 
-						// Handle GEPA-specific offspring_accepted events
-						if (event.type === "offspring_accepted") {
-							// Update candidate with GEPA metadata
-							await db
-								.update(schema.candidates)
-								.set({
-									iteration: event.iteration,
-									archiveIndex: event.archiveIndex,
+							// Persist golden test cases
+							if (event.type === "test_case_generated") {
+								await db.insert(schema.testCases).values({
+									id: event.testCaseId,
+									toolId: event.toolId,
+									query: event.query,
+									expectedTool: event.expectedTool,
+									userCreated: false,
+									runId,
+									invocationType: event.invocationType,
+									shouldCall: event.shouldCall,
+								});
+							}
+
+							// Persist candidate data (Golden optimizer)
+							if (event.type === "candidate_done") {
+								await db.insert(schema.candidates).values({
+									id: event.candidateId,
+									runId,
+									generation: event.generation,
+									toolDescriptions: JSON.stringify(event.toolDescriptions),
+									accuracy: event.accuracy,
+									avgDescriptionLength: event.avgLength,
+									isPareto: event.isPareto,
+									precision: event.precision,
+									recall: event.recall,
+									variationType: event.variationType,
+									status: event.status,
+									rejectionReason: event.rejectionReason,
 									parentId: event.parentId,
-								})
-								.where(eq(schema.candidates.id, event.candidateId));
-						}
-					},
-				});
+								});
+							}
+
+							// Persist evaluation data
+							if (event.type === "evaluation") {
+								await db.insert(schema.evaluations).values({
+									id: crypto.randomUUID(),
+									candidateId: event.candidateId,
+									testCaseId: event.testCase, // Using query as testCaseId
+									selectedTool: event.result.selected,
+									correct: event.result.correct,
+								});
+							}
+						},
+					});
+				} else {
+					await runGEPA({
+						runId,
+						tools,
+						testCases,
+						...config,
+						onProgress: async (event: ProgressEvent) => {
+							// Check if aborted
+							if (abortController.signal.aborted) {
+								if (clientConnected) {
+									try {
+										controller.close();
+									} catch {
+										// Already closed
+									}
+								}
+								return;
+							}
+
+							// Send event to client (non-blocking if disconnected)
+							const data = `data: ${JSON.stringify(event)}\n\n`;
+							sendToClient(data);
+
+							// Save to DB for replay (await to ensure persistence)
+							await db.insert(schema.events).values({
+								id: crypto.randomUUID(),
+								runId,
+								timestamp: new Date(),
+								event: JSON.stringify(event),
+							});
+
+							// Persist candidate data (GEPA)
+							if (event.type === "candidate_done") {
+								await db.insert(schema.candidates).values({
+									id: event.candidateId,
+									runId,
+									generation: event.generation,
+									toolDescriptions: JSON.stringify(event.toolDescriptions),
+									accuracy: event.accuracy,
+									avgDescriptionLength: event.avgLength,
+									isPareto: event.isPareto,
+									precision: event.precision,
+									recall: event.recall,
+									variationType: event.variationType,
+									status: event.status,
+									rejectionReason: event.rejectionReason,
+									parentId: event.parentId,
+								});
+							}
+
+							// Persist evaluation data
+							if (event.type === "evaluation") {
+								await db.insert(schema.evaluations).values({
+									id: crypto.randomUUID(),
+									candidateId: event.candidateId,
+									testCaseId: event.testCase, // Using query as testCaseId
+									selectedTool: event.result.selected,
+									correct: event.result.correct,
+								});
+							}
+
+							// Handle GEPA-specific events
+							if (event.type === "iteration_start") {
+								// Create iteration record
+								await db.insert(schema.iterations).values({
+									id: `${runId}-iter-${event.iteration}`,
+									runId,
+									iterationNumber: event.iteration,
+									startedAt: new Date(),
+									totalEvaluations: event.totalEvaluations,
+								});
+							}
+
+							if (event.type === "parent_selected") {
+								// Update iteration with parent candidate
+								await db
+									.update(schema.iterations)
+									.set({
+										parentCandidateId: event.candidateId,
+									})
+									.where(
+										eq(
+											schema.iterations.id,
+											`${runId}-iter-${event.iteration}`,
+										),
+									);
+							}
+
+							if (event.type === "subsample_eval") {
+								// Update iteration with subsample scores
+								await db
+									.update(schema.iterations)
+									.set({
+										subsampleScore: event.subsampleScore,
+										parentSubsampleScore: event.parentSubsampleScore,
+										subsampleSize: event.subsampleSize,
+									})
+									.where(
+										eq(
+											schema.iterations.id,
+											`${runId}-iter-${event.iteration ?? 0}`,
+										),
+									);
+							}
+
+							if (event.type === "offspring_accepted") {
+								// Update candidate with GEPA metadata
+								await db
+									.update(schema.candidates)
+									.set({
+										iteration: event.iteration,
+										archiveIndex: event.archiveIndex,
+										parentId: event.parentId,
+									})
+									.where(eq(schema.candidates.id, event.candidateId));
+
+								// Update iteration with offspring and acceptance
+								await db
+									.update(schema.iterations)
+									.set({
+										offspringCandidateId: event.candidateId,
+										accepted: true,
+										completedAt: new Date(),
+									})
+									.where(
+										eq(
+											schema.iterations.id,
+											`${runId}-iter-${event.iteration}`,
+										),
+									);
+							}
+
+							if (event.type === "offspring_rejected") {
+								// Update iteration with rejection
+								await db
+									.update(schema.iterations)
+									.set({
+										accepted: false,
+										rejectionReason: event.reason,
+										completedAt: new Date(),
+									})
+									.where(
+										eq(
+											schema.iterations.id,
+											`${runId}-iter-${event.iteration}`,
+										),
+									);
+							}
+
+							if (event.type === "iteration_done") {
+								// Update iteration with final stats
+								await db
+									.update(schema.iterations)
+									.set({
+										totalEvaluations: event.totalEvaluations,
+										completedAt: new Date(),
+									})
+									.where(
+										eq(
+											schema.iterations.id,
+											`${runId}-iter-${event.iteration}`,
+										),
+									);
+							}
+						},
+					});
+				}
 
 				// Mark as completed
 				await db
@@ -1699,16 +1889,36 @@ async function handleGetCandidates(
 		.where(eq(schema.candidates.runId, runId))
 		.orderBy(schema.candidates.generation, schema.candidates.accuracy);
 
-	const candidates = candidatesData.map((c) => ({
-		id: c.id,
-		generation: c.generation,
-		iteration: c.iteration,
-		parentId: c.parentId,
-		toolDescriptions: JSON.parse(c.toolDescriptions),
-		accuracy: c.accuracy,
-		avgDescriptionLength: c.avgDescriptionLength,
-		isPareto: c.isPareto,
-	}));
+	// Fetch evaluations for all candidates
+	const candidates = await Promise.all(
+		candidatesData.map(async (c) => {
+			const evaluationsData = await db
+				.select()
+				.from(schema.evaluations)
+				.where(eq(schema.evaluations.candidateId, c.id));
+
+			const evaluations = evaluationsData.map((e) => ({
+				testCaseId: e.testCaseId ?? "",
+				selectedTool: e.selectedTool,
+				expectedTool: "", // We don't store this separately, could derive from testCase
+				correct: e.correct,
+			}));
+
+			return {
+				id: c.id,
+				generation: c.generation,
+				iteration: c.iteration,
+				parentId: c.parentId,
+				toolDescriptions: JSON.parse(c.toolDescriptions),
+				accuracy: c.accuracy,
+				avgDescriptionLength: c.avgDescriptionLength,
+				isPareto: c.isPareto,
+				rejected: c.status === "rejected",
+				rejectionReason: c.rejectionReason ?? undefined,
+				evaluations,
+			};
+		}),
+	);
 
 	return Response.json(candidates, { headers: corsHeaders });
 }

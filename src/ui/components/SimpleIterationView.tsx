@@ -1,9 +1,12 @@
 import { useState } from "react";
 import type { ProgressEvent } from "../../types";
+import type { CandidateData } from "../queries";
 import { Badge } from "./badge";
 import { Button } from "./button";
 import { Card, CardContent, CardHeader, CardTitle } from "./card";
 import { ScrollArea } from "./scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./tabs";
+import { CandidateFlowGraph } from "./CandidateFlowGraph";
 
 interface Iteration {
 	number: number;
@@ -25,6 +28,8 @@ interface Iteration {
 
 interface SimpleIterationViewProps {
 	events: ProgressEvent[];
+	liveCandidates: CandidateData[];
+	currentlyEvaluatingId?: string;
 }
 
 function buildIterations(events: ProgressEvent[]): Iteration[] {
@@ -84,14 +89,29 @@ function buildIterations(events: ProgressEvent[]): Iteration[] {
 	return iterations;
 }
 
-export function SimpleIterationView({ events }: SimpleIterationViewProps) {
+export function SimpleIterationView({
+	events,
+	liveCandidates,
+	currentlyEvaluatingId,
+}: SimpleIterationViewProps) {
 	const iterations = buildIterations(events);
 	const [selectedIter, setSelectedIter] = useState<number | null>(null);
 
 	const selected = iterations.find((i) => i.number === selectedIter);
 
 	return (
-		<div className="flex h-full">
+		<Tabs defaultValue="progress" className="h-full flex flex-col">
+			<TabsList className="w-full rounded-none border-b flex-shrink-0">
+				<TabsTrigger value="progress" className="flex-1">
+					Progress
+				</TabsTrigger>
+				<TabsTrigger value="graph" className="flex-1">
+					Evolution Graph
+				</TabsTrigger>
+			</TabsList>
+
+			<TabsContent value="progress" className="flex-1 m-0 overflow-hidden">
+				<div className="flex h-full">
 			{/* Left: Iteration list */}
 			<div className="w-80 border-r">
 				<ScrollArea className="h-full">
@@ -275,5 +295,17 @@ export function SimpleIterationView({ events }: SimpleIterationViewProps) {
 				)}
 			</div>
 		</div>
+			</TabsContent>
+
+			<TabsContent value="graph" className="flex-1 m-0">
+				<div className="p-6">
+					<CandidateFlowGraph
+						candidates={liveCandidates}
+						liveMode={true}
+						currentlyEvaluatingId={currentlyEvaluatingId}
+					/>
+				</div>
+			</TabsContent>
+		</Tabs>
 	);
 }

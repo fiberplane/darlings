@@ -29,6 +29,10 @@ export const testCases = sqliteTable("test_cases", {
 	query: text("query").notNull(),
 	expectedTool: text("expected_tool").notNull(),
 	userCreated: integer("user_created", { mode: "boolean" }).default(false),
+	// Golden optimizer fields
+	runId: text("run_id").references(() => optimizationRuns.id), // If generated for specific run
+	invocationType: text("invocation_type"), // "direct" | "indirect" | "negative" for golden optimizer
+	shouldCall: integer("should_call", { mode: "boolean" }), // For golden optimizer
 });
 
 export const optimizationRuns = sqliteTable("optimization_runs", {
@@ -57,6 +61,12 @@ export const candidates = sqliteTable("candidates", {
 	archiveIndex: integer("archive_index"), // Position in archive
 	subsampleScore: real("subsample_score"), // Score on subsample before full eval
 	dominanceCount: integer("dominance_count").default(0), // Tasks dominated
+	status: text("status").default("accepted"), // "accepted" | "rejected" - for tracking rejected candidates
+	rejectionReason: text("rejection_reason"), // Reason if rejected
+	// Golden optimizer specific fields
+	precision: real("precision"), // Precision metric for golden optimizer
+	recall: real("recall"), // Recall metric for golden optimizer
+	variationType: text("variation_type"), // Type of variation used to generate this candidate
 });
 
 export const evaluations = sqliteTable("evaluations", {
@@ -72,4 +82,33 @@ export const events = sqliteTable("events", {
 	runId: text("run_id").references(() => optimizationRuns.id),
 	timestamp: integer("timestamp", { mode: "timestamp" }).notNull(),
 	event: text("event").notNull(), // JSON: ProgressEvent
+});
+
+// GEPA iterations - captures iteration-level metadata for evolution
+export const iterations = sqliteTable("iterations", {
+	id: text("id").primaryKey(),
+	runId: text("run_id").references(() => optimizationRuns.id).notNull(),
+	iterationNumber: integer("iteration_number").notNull(),
+	parentCandidateId: text("parent_candidate_id").references(() => candidates.id),
+	offspringCandidateId: text("offspring_candidate_id").references(() => candidates.id),
+	subsampleScore: real("subsample_score"), // Offspring score on subsample
+	parentSubsampleScore: real("parent_subsample_score"), // Parent score on same subsample
+	subsampleSize: integer("subsample_size"), // Number of test cases in subsample
+	accepted: integer("accepted", { mode: "boolean" }), // Whether offspring was accepted
+	rejectionReason: text("rejection_reason"), // Reason if rejected
+	startedAt: integer("started_at", { mode: "timestamp" }).notNull(),
+	completedAt: integer("completed_at", { mode: "timestamp" }),
+	totalEvaluations: integer("total_evaluations"), // Running count of evaluations
+});
+
+// Subsample evaluations - captures test results during subsample phase
+export const subsampleEvaluations = sqliteTable("subsample_evaluations", {
+	id: text("id").primaryKey(),
+	iterationId: text("iteration_id").references(() => iterations.id).notNull(),
+	candidateId: text("candidate_id").references(() => candidates.id).notNull(),
+	testCaseId: text("test_case_id").references(() => testCases.id).notNull(),
+	selectedTool: text("selected_tool"),
+	expectedTool: text("expected_tool").notNull(),
+	correct: integer("correct", { mode: "boolean" }).notNull(),
+	timestamp: integer("timestamp", { mode: "timestamp" }).notNull(),
 });

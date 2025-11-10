@@ -33,6 +33,11 @@ export type TestCase = {
 	userCreated: boolean;
 };
 
+export type GoldenTestCase = TestCase & {
+	invocationType: "direct" | "indirect" | "negative";
+	shouldCall: boolean;
+};
+
 export type Candidate = {
 	id: string;
 	tools: Tool[];
@@ -53,9 +58,12 @@ export type EvalResult = {
 
 // Optimization Configuration
 export type OptimizationConfig = {
-	maxEvaluations: number; // Total LLM call budget (default: 500)
-	subsampleSize: number; // Quick filter size (default: 5)
-	testsPerTool: number; // Auto-generated tests (default: 5)
+	optimizer: "gepa" | "golden"; // Optimizer algorithm to use
+	maxEvaluations: number; // Total LLM call budget (default: 500) - GEPA only
+	subsampleSize: number; // Quick filter size (default: 5) - GEPA only
+	testsPerTool: number; // Auto-generated tests (default: 5) - GEPA only
+	testCasesPerCategory?: number; // Golden optimizer: test cases per category (default: 10)
+	candidateCount?: number; // Golden optimizer: number of candidates (default: 10)
 	model: ModelName; // LLM to use
 	maxConcurrentEvaluations: number; // Concurrent evaluations (default: 3)
 };
@@ -70,6 +78,17 @@ export type GEPAConfig = {
 	maxConcurrentEvaluations: number; // Rate limiting
 	tools: Tool[];
 	testCases: TestCase[];
+	onProgress: (event: ProgressEvent) => void;
+};
+
+// Golden Optimizer Configuration
+export type GoldenOptimizerConfig = {
+	runId: string;
+	model: ModelName;
+	maxConcurrentEvaluations: number;
+	tools: Tool[];
+	testCasesPerCategory: number; // Number of direct/indirect/negative test cases to generate (default: 10)
+	candidateCount: number; // Number of candidate variations to generate (default: 10)
 	onProgress: (event: ProgressEvent) => void;
 };
 
@@ -103,6 +122,14 @@ export type ProgressEvent =
 			generation?: number;
 			toolDescriptions: Record<string, string>;
 			isPareto: boolean;
+			// GEPA specific fields
+			status?: "accepted" | "rejected";
+			rejectionReason?: string;
+			parentId?: string;
+			// Golden optimizer specific fields
+			variationType?: string;
+			precision?: number;
+			recall?: number;
 	  }
 	| {
 			type: "pareto_front";
@@ -148,6 +175,7 @@ export type ProgressEvent =
 	| {
 			type: "subsample_eval";
 			candidateId: string;
+			iteration: number;
 			subsampleScore: number;
 			parentSubsampleScore: number;
 			subsampleSize: number;
@@ -187,4 +215,48 @@ export type ProgressEvent =
 			totalEvaluations: number;
 			acceptedCount: number;
 			rejectedCount: number;
+	  }
+	| { type: "test_case_generation_start"; toolCount: number }
+	| {
+			type: "test_case_generated";
+			testCaseId: string;
+			toolId: string;
+			expectedTool: string;
+			invocationType: "direct" | "indirect" | "negative";
+			query: string;
+			shouldCall: boolean;
+	  }
+	| {
+			type: "test_case_generation_done";
+			totalGenerated: number;
+			directCount: number;
+			indirectCount: number;
+			negativeCount: number;
+	  }
+	| { type: "candidate_generation_start"; targetCount: number }
+	| {
+			type: "candidate_generated";
+			candidateId: string;
+			variationType: string;
+	  }
+	| {
+			type: "candidate_generation_done";
+			totalGenerated: number;
+	  }
+	| {
+			type: "evaluation_phase_start";
+			candidateCount: number;
+			testCaseCount: number;
+	  }
+	| {
+			type: "evaluation_phase_done";
+			evaluatedCount: number;
+	  }
+	| {
+			type: "best_candidate_selected";
+			candidateId: string;
+			accuracy: number;
+			avgLength: number;
+			precision: number;
+			recall: number;
 	  };

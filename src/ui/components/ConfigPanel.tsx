@@ -42,6 +42,12 @@ import {
 } from "./select";
 import { Separator } from "./separator";
 import { Slider } from "./slider";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "./tooltip";
 
 interface ConfigPanelProps {
 	onStart: (serverId: string, config: OptimizationConfig) => void;
@@ -84,9 +90,12 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 	const [selectedServer, setSelectedServer] = useState<string>("");
 
 	// Configuration
+	const [optimizer, setOptimizer] = useState<"gepa" | "golden">("gepa");
 	const [maxEvaluations, setMaxEvaluations] = useState(500);
 	const [subsampleSize, setSubsampleSize] = useState(5);
 	const [testsPerTool, setTestsPerTool] = useState(5);
+	const [testCasesPerCategory, setTestCasesPerCategory] = useState(10);
+	const [candidateCount, setCandidateCount] = useState(10);
 	const [model, setModel] = useState<ModelName>("claude-haiku-4-5");
 	const [maxConcurrentEvaluations, _setMaxConcurrentEvaluations] = useState(3);
 	const [customTestPrompt, setCustomTestPrompt] = useState("");
@@ -325,7 +334,7 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 			return;
 		}
 
-		if (filteredTestCases.length === 0) {
+		if (optimizer === "gepa" && filteredTestCases.length === 0) {
 			setAlertMessage("Please generate test cases first");
 			setAlertVariant("destructive");
 			return;
@@ -333,9 +342,12 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 
 		setAlertMessage(null);
 		onStart(selectedServer, {
+			optimizer,
 			maxEvaluations,
 			subsampleSize,
 			testsPerTool,
+			testCasesPerCategory,
+			candidateCount,
 			model,
 			maxConcurrentEvaluations,
 		});
@@ -599,32 +611,66 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 									Deselect All
 								</Button>
 							</div>
-							<div className="border rounded-lg p-4 bg-muted/30">
-								<div className="space-y-2 max-h-64 overflow-y-auto">
-									{tools.map((tool) => (
-										<label
-											key={tool.id}
-											className="flex items-center space-x-3 p-2 rounded-md hover:bg-background cursor-pointer transition-colors"
-										>
-											<input
-												type="checkbox"
-												checked={tool.optimizationStatus === "selected"}
-												onChange={(e) => {
-													updateToolSelectionMutation.mutate({
-														toolId: tool.id,
-														optimizationStatus: e.target.checked
-															? "selected"
-															: "unselected",
-													});
-												}}
-												disabled={updateToolSelectionMutation.isPending}
-												className="h-4 w-4 rounded border-gray-300"
-											/>
-											<span className="text-sm flex-1">{tool.name}</span>
-										</label>
-									))}
+							<TooltipProvider>
+								<div className="border rounded-lg p-4 bg-muted/30">
+									<div className="space-y-2 max-h-64 overflow-y-auto">
+										{tools.map((tool) => (
+											<label
+												key={tool.id}
+												className="flex items-center space-x-3 p-2 rounded-md hover:bg-background cursor-pointer transition-colors"
+											>
+												<input
+													type="checkbox"
+													checked={tool.optimizationStatus === "selected"}
+													onChange={(e) => {
+														updateToolSelectionMutation.mutate({
+															toolId: tool.id,
+															optimizationStatus: e.target.checked
+																? "selected"
+																: "unselected",
+														});
+													}}
+													disabled={updateToolSelectionMutation.isPending}
+													className="h-4 w-4 rounded border-gray-300"
+												/>
+												<Tooltip>
+													<TooltipTrigger asChild>
+														<span className="text-sm flex-1 cursor-help">
+															{tool.name}
+														</span>
+													</TooltipTrigger>
+													<TooltipContent
+														side="right"
+														className="max-w-md p-4 space-y-2"
+														sideOffset={10}
+													>
+														<div className="space-y-2">
+															<div className="font-semibold text-base">{tool.name}</div>
+															{tool.description && (
+																<div className="text-sm">
+																	<div className="font-medium mb-1">Description:</div>
+																	<div className="text-muted-foreground">
+																		{tool.description}
+																	</div>
+																</div>
+															)}
+															{tool.inputSchema &&
+																Object.keys(tool.inputSchema).length > 0 && (
+																	<div className="text-sm">
+																		<div className="font-medium mb-1">Parameters:</div>
+																		<div className="text-muted-foreground font-mono text-xs max-h-48 overflow-y-auto">
+																			{JSON.stringify(tool.inputSchema, null, 2)}
+																		</div>
+																	</div>
+																)}
+														</div>
+													</TooltipContent>
+												</Tooltip>
+											</label>
+										))}
+									</div>
 								</div>
-							</div>
+							</TooltipProvider>
 						</div>
 					</>
 				)}
@@ -634,124 +680,218 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 					<div className="space-y-2">
 						<h3 className="text-lg font-semibold">Optimization Settings</h3>
 						<p className="text-sm text-muted-foreground">
-							Uses a genetic algorithm (GEPA) to evolve tool descriptions across
-							generations, optimizing for accuracy and conciseness.
+							Choose between GEPA (evolutionary algorithm) or Golden Set (generate-and-test approach) to optimize tool descriptions.
 						</p>
 					</div>
 
-					<div className="space-y-6">
-						<div className="space-y-3">
-							<div className="flex justify-between items-center">
-								<Label htmlFor="max-evals">Max Evaluations (Budget)</Label>
-								<span className="text-sm font-medium text-foreground">
-									{maxEvaluations}
-								</span>
-							</div>
-							<Slider
-								id="max-evals"
-								min={100}
-								max={2000}
-								step={50}
-								value={[maxEvaluations]}
-								onValueChange={(value) => {
-									const newValue = value[0];
-									if (newValue !== undefined) {
-										setMaxEvaluations(newValue);
-									}
-								}}
-							/>
-							<p className="text-xs text-muted-foreground">
-								Total LLM evaluation budget. Each iteration costs subsample (5)
-								+ full (~{filteredTestCases.length}) = ~
-								{5 + filteredTestCases.length} evals if accepted. With{" "}
-								{maxEvaluations} evals and 50% acceptance: expect ~
-								{Math.floor(
-									maxEvaluations / ((5 + filteredTestCases.length) / 2),
-								)}
-								-{Math.floor(maxEvaluations / (5 + filteredTestCases.length))}{" "}
-								candidates.
-							</p>
-						</div>
+					<div className="space-y-2 max-w-md">
+						<Label htmlFor="optimizer">Optimizer Algorithm</Label>
+						<Select
+							value={optimizer}
+							onValueChange={(value) => setOptimizer(value as "gepa" | "golden")}
+						>
+							<SelectTrigger id="optimizer">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="gepa">GEPA (Genetic-Pareto)</SelectItem>
+								<SelectItem value="golden">Golden Set</SelectItem>
+							</SelectContent>
+						</Select>
+						<p className="text-xs text-muted-foreground">
+							{optimizer === "gepa"
+								? "Evolutionary algorithm that iteratively mutates descriptions based on failures. Budget-based approach that continues until evaluation limit."
+								: "Generate test cases (direct/indirect/negative), create multiple candidate variations, evaluate all, select best via Pareto front."}
+						</p>
+					</div>
 
-						<div className="space-y-3">
-							<div className="flex justify-between items-center">
-								<Label htmlFor="subsample">Subsample Size</Label>
-								<span className="text-sm font-medium text-foreground">
-									{subsampleSize}
-								</span>
-							</div>
-							<Slider
-								id="subsample"
-								min={3}
-								max={Math.min(20, filteredTestCases.length || 20)}
-								step={1}
-								value={[subsampleSize]}
-								onValueChange={(value) => {
-									const newValue = value[0];
-									if (newValue !== undefined) {
-										setSubsampleSize(newValue);
-									}
-								}}
-							/>
-							<p className="text-xs text-muted-foreground">
-								Quick filter before full evaluation. Lower = faster but less
-								accurate filtering. Must be ≤ {filteredTestCases.length} test
-								cases. Recommended: 5-10.
-							</p>
-						</div>
-
-						<div className="space-y-3">
-							<div className="flex justify-between items-center">
-								<Label htmlFor="tests-per-tool">Auto-Generate Count</Label>
-								<Input
-									type="number"
-									min={1}
-									max={50}
-									value={testsPerTool}
-									onChange={(e) => {
-										const val = Number.parseInt(e.target.value, 10);
-										if (val >= 1 && val <= 50) {
-											setTestsPerTool(val);
+					{optimizer === "gepa" ? (
+						<div className="space-y-6">
+							<div className="space-y-3">
+								<div className="flex justify-between items-center">
+									<Label htmlFor="max-evals">Max Evaluations (Budget)</Label>
+									<span className="text-sm font-medium text-foreground">
+										{maxEvaluations}
+									</span>
+								</div>
+								<Slider
+									id="max-evals"
+									min={100}
+									max={2000}
+									step={50}
+									value={[maxEvaluations]}
+									onValueChange={(value) => {
+										const newValue = value[0];
+										if (newValue !== undefined) {
+											setMaxEvaluations(newValue);
 										}
 									}}
-									className="w-20 h-8 text-sm"
 								/>
+								<p className="text-xs text-muted-foreground">
+									Total LLM evaluation budget. Each iteration costs subsample (5)
+									+ full (~{filteredTestCases.length}) = ~
+									{5 + filteredTestCases.length} evals if accepted. With{" "}
+									{maxEvaluations} evals and 50% acceptance: expect ~
+									{Math.floor(
+										maxEvaluations / ((5 + filteredTestCases.length) / 2),
+									)}
+									-{Math.floor(maxEvaluations / (5 + filteredTestCases.length))}{" "}
+									candidates.
+								</p>
 							</div>
-							<Slider
-								id="tests-per-tool"
-								min={1}
-								max={50}
-								step={1}
-								value={[testsPerTool]}
-								onValueChange={(value) => {
-									const newValue = value[0];
-									if (newValue !== undefined) {
-										setTestsPerTool(newValue);
-									}
-								}}
-							/>
-							<p className="text-xs text-muted-foreground">
-								Number of test cases to auto-generate per tool (1-50).
-							</p>
-						</div>
 
-						<div className="space-y-3">
-							<Label htmlFor="custom-test-prompt">
-								Custom Test Generation Prompt (Optional)
-							</Label>
-							<textarea
-								id="custom-test-prompt"
-								value={customTestPrompt}
-								onChange={(e) => setCustomTestPrompt(e.target.value)}
-								placeholder="Add custom instructions for test generation (e.g., 'Focus on edge cases', 'Include multi-step scenarios', etc.)"
-								className="w-full min-h-[80px] px-3 py-2 text-sm border rounded-md resize-y"
-							/>
-							<p className="text-xs text-muted-foreground">
-								Optional: Add specific instructions to guide test case generation.
-								This will be appended to the default prompt.
-							</p>
+							<div className="space-y-3">
+								<div className="flex justify-between items-center">
+									<Label htmlFor="subsample">Subsample Size</Label>
+									<span className="text-sm font-medium text-foreground">
+										{subsampleSize}
+									</span>
+								</div>
+								<Slider
+									id="subsample"
+									min={3}
+									max={Math.min(20, filteredTestCases.length || 20)}
+									step={1}
+									value={[subsampleSize]}
+									onValueChange={(value) => {
+										const newValue = value[0];
+										if (newValue !== undefined) {
+											setSubsampleSize(newValue);
+										}
+									}}
+								/>
+								<p className="text-xs text-muted-foreground">
+									Quick filter before full evaluation. Lower = faster but less
+									accurate filtering. Must be ≤ {filteredTestCases.length} test
+									cases. Recommended: 5-10.
+								</p>
+							</div>
+
+							<div className="space-y-3">
+								<div className="flex justify-between items-center">
+									<Label htmlFor="tests-per-tool">Auto-Generate Count</Label>
+									<Input
+										type="number"
+										min={1}
+										max={50}
+										value={testsPerTool}
+										onChange={(e) => {
+											const val = Number.parseInt(e.target.value, 10);
+											if (val >= 1 && val <= 50) {
+												setTestsPerTool(val);
+											}
+										}}
+										className="w-20 h-8 text-sm"
+									/>
+								</div>
+								<Slider
+									id="tests-per-tool"
+									min={1}
+									max={50}
+									step={1}
+									value={[testsPerTool]}
+									onValueChange={(value) => {
+										const newValue = value[0];
+										if (newValue !== undefined) {
+											setTestsPerTool(newValue);
+										}
+									}}
+								/>
+								<p className="text-xs text-muted-foreground">
+									Number of test cases to auto-generate per tool (1-50).
+								</p>
+							</div>
+
+							<div className="space-y-3">
+								<Label htmlFor="custom-test-prompt">
+									Custom Test Generation Prompt (Optional)
+								</Label>
+								<textarea
+									id="custom-test-prompt"
+									value={customTestPrompt}
+									onChange={(e) => setCustomTestPrompt(e.target.value)}
+									placeholder="Add custom instructions for test generation (e.g., 'Focus on edge cases', 'Include multi-step scenarios', etc.)"
+									className="w-full min-h-[80px] px-3 py-2 text-sm border rounded-md resize-y"
+								/>
+								<p className="text-xs text-muted-foreground">
+									Optional: Add specific instructions to guide test case generation.
+									This will be appended to the default prompt.
+								</p>
+							</div>
 						</div>
-					</div>
+					) : (
+						<div className="space-y-6">
+							<div className="space-y-3">
+								<div className="flex justify-between items-center">
+									<Label htmlFor="test-cases-per-category">Test Cases Per Category</Label>
+									<Input
+										type="number"
+										min={5}
+										max={50}
+										value={testCasesPerCategory}
+										onChange={(e) => {
+											const val = Number.parseInt(e.target.value, 10);
+											if (val >= 5 && val <= 50) {
+												setTestCasesPerCategory(val);
+											}
+										}}
+										className="w-20 h-8 text-sm"
+									/>
+								</div>
+								<Slider
+									id="test-cases-per-category"
+									min={5}
+									max={50}
+									step={5}
+									value={[testCasesPerCategory]}
+									onValueChange={(value) => {
+										const newValue = value[0];
+										if (newValue !== undefined) {
+											setTestCasesPerCategory(newValue);
+										}
+									}}
+								/>
+								<p className="text-xs text-muted-foreground">
+									Auto-generates {testCasesPerCategory} test cases per category (direct, indirect, negative) for each tool. Total: {testCasesPerCategory * 3} per tool.
+								</p>
+							</div>
+
+							<div className="space-y-3">
+								<div className="flex justify-between items-center">
+									<Label htmlFor="candidate-count">Number of Candidates</Label>
+									<Input
+										type="number"
+										min={5}
+										max={30}
+										value={candidateCount}
+										onChange={(e) => {
+											const val = Number.parseInt(e.target.value, 10);
+											if (val >= 5 && val <= 30) {
+												setCandidateCount(val);
+											}
+										}}
+										className="w-20 h-8 text-sm"
+									/>
+								</div>
+								<Slider
+									id="candidate-count"
+									min={5}
+									max={30}
+									step={1}
+									value={[candidateCount]}
+									onValueChange={(value) => {
+										const newValue = value[0];
+										if (newValue !== undefined) {
+											setCandidateCount(newValue);
+										}
+									}}
+								/>
+								<p className="text-xs text-muted-foreground">
+									Generates {candidateCount} candidate variations (baseline + {candidateCount - 1} variations focused on clarity, specificity, conciseness, etc.).
+								</p>
+							</div>
+						</div>
+					)}
 
 					<div className="space-y-2 max-w-md">
 						<Label htmlFor="model">Model</Label>
@@ -782,111 +922,117 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 					<div className="space-y-2">
 						<div className="flex items-center justify-between">
 							<h3 className="text-lg font-semibold">Test Cases</h3>
-							<Badge variant="secondary">
-								{filteredTestCases.length} total
-							</Badge>
+							{optimizer === "gepa" && (
+								<Badge variant="secondary">
+									{filteredTestCases.length} total
+								</Badge>
+							)}
 						</div>
 						<p className="text-sm text-muted-foreground">
-							These queries evaluate how well descriptions help select the
-							correct tool. Use the slider above to set count, then generate or
-							add manually.
+							{optimizer === "gepa"
+								? "These queries evaluate how well descriptions help select the correct tool. Use the slider above to set count, then generate or add manually."
+								: "Golden set optimizer auto-generates its own test cases (direct, indirect, negative invocations) during optimization. No manual test generation needed."}
 						</p>
 					</div>
 
-					<div className="flex flex-wrap gap-2">
-						<Button
-							onClick={handleGenerateTests}
-							disabled={!selectedServer || generateTestsMutation.isPending}
-							variant="outline"
-						>
-							{generateTestsMutation.isPending
-								? "Generating..."
-								: `Generate ${testsPerTool} per tool`}
-						</Button>
-						<Button
-							onClick={() => setShowAddTestForm(!showAddTestForm)}
-							disabled={!selectedServer}
-							variant="outline"
-						>
-							{showAddTestForm ? "Cancel" : "Add Test Case"}
-						</Button>
-					</div>
-
-					{showAddTestForm && (
-						<div className="border rounded-lg p-4 bg-muted/30 space-y-3">
-							<div className="space-y-2">
-								<Label htmlFor="test-query">Query</Label>
-								<Input
-									id="test-query"
-									type="text"
-									value={newTestQuery}
-									onChange={(e) => setNewTestQuery(e.target.value)}
-									placeholder="What should this query match?"
-								/>
+					{optimizer === "gepa" && (
+						<>
+							<div className="flex flex-wrap gap-2">
+								<Button
+									onClick={handleGenerateTests}
+									disabled={!selectedServer || generateTestsMutation.isPending}
+									variant="outline"
+								>
+									{generateTestsMutation.isPending
+										? "Generating..."
+										: `Generate ${testsPerTool} per tool`}
+								</Button>
+								<Button
+									onClick={() => setShowAddTestForm(!showAddTestForm)}
+									disabled={!selectedServer}
+									variant="outline"
+								>
+									{showAddTestForm ? "Cancel" : "Add Test Case"}
+								</Button>
 							</div>
-							<div className="space-y-2">
-								<Label htmlFor="test-tool">Expected Tool</Label>
-								<Select value={newTestTool} onValueChange={setNewTestTool}>
-									<SelectTrigger id="test-tool">
-										<SelectValue placeholder="Select expected tool" />
-									</SelectTrigger>
-									<SelectContent>
-										{tools
-											.filter((t) => t.optimizationStatus === "selected")
-											.map((tool) => (
-												<SelectItem key={tool.id} value={tool.name}>
-													{tool.name}
-												</SelectItem>
-											))}
-									</SelectContent>
-								</Select>
-							</div>
-							<Button
-								onClick={handleAddTestCase}
-								disabled={addTestCaseMutation.isPending}
-							>
-								{addTestCaseMutation.isPending ? "Adding..." : "Add Test Case"}
-							</Button>
-						</div>
-					)}
 
-					{filteredTestCases.length > 0 && (
-						<div className="border rounded-lg p-4 bg-muted/30">
-							<div className="space-y-2 max-h-64 overflow-y-auto">
-								{filteredTestCases.map((tc) => {
-									const _tool = tools.find((t) => t.id === tc.toolId);
-									return (
-										<div
-											key={tc.id}
-											className="flex items-start gap-3 p-3 bg-background rounded-md border"
-										>
-											<div className="flex-1 space-y-1">
-												<div className="text-sm">{tc.query}</div>
-												<div className="flex items-center gap-2">
-													<Badge variant="outline" className="text-xs">
-														{tc.expectedTool}
-													</Badge>
-													{tc.userCreated && (
-														<Badge variant="secondary" className="text-xs">
-															Manual
-														</Badge>
-													)}
+							{showAddTestForm && (
+								<div className="border rounded-lg p-4 bg-muted/30 space-y-3">
+									<div className="space-y-2">
+										<Label htmlFor="test-query">Query</Label>
+										<Input
+											id="test-query"
+											type="text"
+											value={newTestQuery}
+											onChange={(e) => setNewTestQuery(e.target.value)}
+											placeholder="What should this query match?"
+										/>
+									</div>
+									<div className="space-y-2">
+										<Label htmlFor="test-tool">Expected Tool</Label>
+										<Select value={newTestTool} onValueChange={setNewTestTool}>
+											<SelectTrigger id="test-tool">
+												<SelectValue placeholder="Select expected tool" />
+											</SelectTrigger>
+											<SelectContent>
+												{tools
+													.filter((t) => t.optimizationStatus === "selected")
+													.map((tool) => (
+														<SelectItem key={tool.id} value={tool.name}>
+															{tool.name}
+														</SelectItem>
+													))}
+											</SelectContent>
+										</Select>
+									</div>
+									<Button
+										onClick={handleAddTestCase}
+										disabled={addTestCaseMutation.isPending}
+									>
+										{addTestCaseMutation.isPending ? "Adding..." : "Add Test Case"}
+									</Button>
+								</div>
+							)}
+
+							{filteredTestCases.length > 0 && (
+								<div className="border rounded-lg p-4 bg-muted/30">
+									<div className="space-y-2 max-h-64 overflow-y-auto">
+										{filteredTestCases.map((tc) => {
+											const _tool = tools.find((t) => t.id === tc.toolId);
+											return (
+												<div
+													key={tc.id}
+													className="flex items-start gap-3 p-3 bg-background rounded-md border"
+												>
+													<div className="flex-1 space-y-1">
+														<div className="text-sm">{tc.query}</div>
+														<div className="flex items-center gap-2">
+															<Badge variant="outline" className="text-xs">
+																{tc.expectedTool}
+															</Badge>
+															{tc.userCreated && (
+																<Badge variant="secondary" className="text-xs">
+																	Manual
+																</Badge>
+															)}
+														</div>
+													</div>
+													<Button
+														variant="ghost"
+														size="sm"
+														onClick={() => handleDeleteTestCase(tc.id)}
+														disabled={deleteTestCaseMutation.isPending}
+														className="flex-shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+													>
+														<X className="h-4 w-4" />
+													</Button>
 												</div>
-											</div>
-											<Button
-												variant="ghost"
-												size="sm"
-												onClick={() => handleDeleteTestCase(tc.id)}
-												disabled={deleteTestCaseMutation.isPending}
-												className="flex-shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-											>
-												<X className="h-4 w-4" />
-											</Button>
-										</div>
-									);
-								})}
-							</div>
-						</div>
+											);
+										})}
+									</div>
+								</div>
+							)}
+						</>
 					)}
 				</div>
 

@@ -190,6 +190,14 @@ export interface CandidateData {
 	accuracy: number;
 	avgDescriptionLength: number;
 	isPareto: boolean;
+	rejected?: boolean;
+	rejectionReason?: string;
+	evaluations?: Array<{
+		testCaseId: string;
+		selectedTool: string | null;
+		expectedTool: string;
+		correct: boolean;
+	}>;
 }
 
 export function useCandidates(runId: string | undefined) {

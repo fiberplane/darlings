@@ -1,36 +1,41 @@
-import { Check, ChevronDown, ChevronRight, Copy, Eye } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy } from "lucide-react";
 import { useState } from "react";
-import { CartesianGrid, Scatter, ScatterChart, XAxis, YAxis } from "recharts";
 import type { CandidateData } from "../queries";
 import { Badge } from "./badge";
 import { Button } from "./button";
 import { Card, CardContent, CardHeader, CardTitle } from "./card";
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from "./chart";
-import {
-	Accordion,
-	AccordionContent,
-	AccordionItem,
-	AccordionTrigger,
-} from "./accordion";
+import { Label } from "./label";
 import { Separator } from "./separator";
+import { Slider } from "./slider";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./tabs";
+import { CandidateFlowGraph } from "./CandidateFlowGraph";
 
 interface ResultsPanelProps {
 	candidates: CandidateData[];
 }
 
-function CandidateEvolutionView({ candidates }: { candidates: CandidateData[] }) {
+function RankedCandidateList({ candidates, isGEPA }: { candidates: CandidateData[]; isGEPA: boolean }) {
 	const [copiedId, setCopiedId] = useState<string | null>(null);
-	const [expandedCandidate, setExpandedCandidate] = useState<string | null>(null);
+	const [accuracyWeight, setAccuracyWeight] = useState(70); // 0-100 percentage
 
-	// Sort candidates by iteration (generation as fallback)
-	const sortedCandidates = [...candidates].sort((a, b) => {
-		const aIter = a.iteration ?? a.generation ?? 0;
-		const bIter = b.iteration ?? b.generation ?? 0;
-		return aIter - bIter;
-	});
+	// Calculate combined score: higher accuracy + shorter length = better
+	const calculateScore = (candidate: CandidateData) => {
+		const accuracyWeightDecimal = accuracyWeight / 100;
+		const lengthWeightDecimal = (100 - accuracyWeight) / 100;
 
-	// Create a map for quick parent lookup
-	const candidateMap = new Map(candidates.map((c) => [c.id, c]));
+		const accuracyScore = candidate.accuracy * accuracyWeightDecimal;
+		const maxLength = 200; // Assume reasonable max
+		const lengthScore = Math.max(0, (maxLength - candidate.avgDescriptionLength) / maxLength) * lengthWeightDecimal;
+		return accuracyScore + lengthScore;
+	};
+
+	// Sort by combined score (descending)
+	const sortedCandidates = [...candidates].sort((a, b) => calculateScore(b) - calculateScore(a));
+
+	// Find baseline candidate (iteration 0 or no parent)
+	const baselineCandidate = candidates.find(
+		c => (c.iteration === 0 || c.generation === 0) || (!c.parentId)
+	);
 
 	function copyToClipboard(candidate: CandidateData) {
 		const formatted = JSON.stringify(candidate.toolDescriptions, null, 2);
@@ -39,202 +44,135 @@ function CandidateEvolutionView({ candidates }: { candidates: CandidateData[] })
 		setTimeout(() => setCopiedId(null), 2000);
 	}
 
-	function calculateDiff(candidateId: string): { added: number; removed: number; modified: number } | null {
-		const candidate = candidateMap.get(candidateId);
-		if (!candidate?.parentId) return null;
-
-		const parent = candidateMap.get(candidate.parentId);
-		if (!parent) return null;
-
-		const candidateTools = Object.keys(candidate.toolDescriptions);
-		const parentTools = Object.keys(parent.toolDescriptions);
-
-		let modified = 0;
-		for (const toolName of candidateTools) {
-			if (parentTools.includes(toolName)) {
-				if (candidate.toolDescriptions[toolName] !== parent.toolDescriptions[toolName]) {
-					modified++;
-				}
-			}
-		}
-
-		const added = candidateTools.filter(t => !parentTools.includes(t)).length;
-		const removed = parentTools.filter(t => !candidateTools.includes(t)).length;
-
-		return { added, removed, modified };
-	}
+	const concisenessWeight = 100 - accuracyWeight;
 
 	return (
-		<div className="space-y-4">
-			{sortedCandidates.map((candidate) => {
-				const parent = candidate.parentId ? candidateMap.get(candidate.parentId) : null;
-				const diff = calculateDiff(candidate.id);
-				const isExpanded = expandedCandidate === candidate.id;
+		<div className="space-y-6">
+			{/* Weight Controls */}
+			<div className="p-4 bg-muted/30 rounded-lg border">
+				<div className="space-y-3">
+					<div className="flex items-center justify-between">
+						<Label htmlFor="accuracy-weight" className="text-sm font-medium">
+							Ranking Weights
+						</Label>
+						<div className="text-sm text-muted-foreground">
+							Accuracy: <span className="font-semibold">{accuracyWeight}%</span> • Conciseness: <span className="font-semibold">{concisenessWeight}%</span>
+						</div>
+					</div>
+					<Slider
+						id="accuracy-weight"
+						min={0}
+						max={100}
+						step={5}
+						value={[accuracyWeight]}
+						onValueChange={(value) => {
+							const newValue = value[0];
+							if (newValue !== undefined) {
+								setAccuracyWeight(newValue);
+							}
+						}}
+					/>
+					<div className="flex justify-between text-xs text-muted-foreground">
+						<span>Prioritize Conciseness</span>
+						<span>Prioritize Accuracy</span>
+					</div>
+				</div>
+			</div>
+
+			{/* Candidate List */}
+			<div className="space-y-3">
+				{sortedCandidates.map((candidate, index) => {
+				const rank = index + 1;
 				const iterationNum = candidate.iteration ?? candidate.generation ?? 0;
+				const isBaseline = candidate.id === baselineCandidate?.id;
+
+				// Count evaluations from the evaluations array if available
+				const totalEvals = candidate.evaluations?.length ?? 0;
+				const passedEvals = candidate.evaluations?.filter(e => e.correct).length ?? 0;
 
 				return (
-					<Card key={candidate.id} className="border-l-4 border-l-primary">
-						<CardHeader className="pb-3">
-							<div className="flex items-start justify-between">
+					<Card key={candidate.id} className={`${rank === 1 ? 'border-2 border-green-500' : ''}`}>
+						<CardContent className="pt-6">
+							<div className="flex items-start gap-4 mb-4">
+								<div className={`text-3xl font-bold ${rank === 1 ? 'text-green-600' : 'text-muted-foreground'} flex-shrink-0`}>
+									#{rank}
+								</div>
 								<div className="flex-1">
-									<div className="flex items-center gap-3 mb-2">
-										<CardTitle className="text-base">
-											Iteration {iterationNum}
-										</CardTitle>
+									<div className="flex items-center gap-2 mb-2">
+										<span className="text-sm text-muted-foreground">
+											{isGEPA ? `Iteration ${iterationNum}` : `Candidate ${rank}`}
+										</span>
 										<code className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
 											{candidate.id.slice(0, 8)}
 										</code>
-										{candidate.isPareto && (
+										{isBaseline && (
 											<Badge variant="outline" className="text-xs">
-												Pareto Front
+												Baseline
 											</Badge>
 										)}
 									</div>
-									<div className="flex items-center gap-4 text-sm">
+									<div className="flex items-center gap-6 mb-3">
 										<div>
-											<span className="text-muted-foreground">Accuracy:</span>{" "}
-											<span className="font-semibold">
+											<div className="text-3xl font-bold">
 												{(candidate.accuracy * 100).toFixed(1)}%
-											</span>
+											</div>
+											<div className="text-sm text-muted-foreground">
+												{passedEvals}/{totalEvals} evals passed
+											</div>
 										</div>
-										<div>
-											<span className="text-muted-foreground">Avg Length:</span>{" "}
-											<span className="font-semibold">
-												{Math.round(candidate.avgDescriptionLength)} chars
-											</span>
+										<div className="text-sm text-muted-foreground">
+											{Math.round(candidate.avgDescriptionLength)} chars avg
 										</div>
-									</div>
-									{parent && (
-										<div className="mt-2 text-xs text-muted-foreground">
-											<span>Parent: </span>
-											<code className="bg-muted px-1 py-0.5 rounded">
-												{parent.id.slice(0, 8)}
-											</code>
-											<span className="ml-2">
-												({(parent.accuracy * 100).toFixed(1)}%, {Math.round(parent.avgDescriptionLength)} chars)
-											</span>
-											{diff && (
-												<span className="ml-3">
-													{diff.modified > 0 && (
-														<span className="text-yellow-600">
-															{diff.modified} modified
-														</span>
-													)}
-													{diff.added > 0 && (
-														<span className="text-green-600 ml-2">
-															+{diff.added} added
-														</span>
-													)}
-													{diff.removed > 0 && (
-														<span className="text-red-600 ml-2">
-															-{diff.removed} removed
-														</span>
-													)}
-												</span>
+										<Button
+											variant="ghost"
+											size="sm"
+											onClick={() => copyToClipboard(candidate)}
+											className="ml-auto"
+										>
+											{copiedId === candidate.id ? (
+												<>
+													<Check className="h-4 w-4 mr-1" />
+													Copied
+												</>
+											) : (
+												<>
+													<Copy className="h-4 w-4 mr-1" />
+													Copy
+												</>
 											)}
-										</div>
-									)}
-								</div>
-								<div className="flex items-center gap-2">
-									<Button
-										variant="ghost"
-										size="sm"
-										onClick={() => copyToClipboard(candidate)}
-									>
-										{copiedId === candidate.id ? (
-											<>
-												<Check className="h-4 w-4 mr-1" />
-												Copied
-											</>
-										) : (
-											<>
-												<Copy className="h-4 w-4 mr-1" />
-												Copy
-											</>
-										)}
-									</Button>
-									<Button
-										variant="ghost"
-										size="sm"
-										onClick={() =>
-											setExpandedCandidate(isExpanded ? null : candidate.id)
-										}
-									>
-										{isExpanded ? (
-											<>
-												<ChevronDown className="h-4 w-4 mr-1" />
-												Collapse
-											</>
-										) : (
-											<>
-												<ChevronRight className="h-4 w-4 mr-1" />
-												Expand
-											</>
-										)}
-									</Button>
-								</div>
-							</div>
-						</CardHeader>
-						{isExpanded && (
-							<CardContent className="pt-0">
-								<Separator className="mb-4" />
-								<div className="space-y-4">
-									{Object.entries(candidate.toolDescriptions).map(
-										([toolName, description]) => {
-											const parentDesc = parent?.toolDescriptions[toolName];
-											const isModified = parentDesc && parentDesc !== description;
-											const isNew = !parentDesc;
-
-											return (
-												<div key={toolName} className="space-y-2">
-													<div className="flex items-center justify-between">
-														<h4 className="font-semibold text-sm flex items-center gap-2">
-															{toolName}
-															{isNew && (
-																<Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-300">
-																	NEW
-																</Badge>
-															)}
-															{isModified && (
-																<Badge variant="outline" className="text-xs bg-yellow-50 text-yellow-700 border-yellow-300">
-																	MODIFIED
-																</Badge>
-															)}
-														</h4>
-														<Badge variant="outline" className="text-xs">
-															{description.length} chars
-														</Badge>
-													</div>
-													{isModified && parentDesc && (
-														<div className="p-3 bg-red-50 rounded-md border border-red-200">
-															<p className="text-xs text-red-700 font-semibold mb-1">
-																Previous (Parent):
-															</p>
-															<p className="text-sm text-red-900 whitespace-pre-wrap">
-																{parentDesc}
+										</Button>
+									</div>
+									<Separator className="mb-4" />
+									<div className="space-y-4">
+										{Object.entries(candidate.toolDescriptions).map(
+											([toolName, description]) => {
+												return (
+													<div key={toolName} className="space-y-2">
+														<div className="flex items-center justify-between">
+															<h4 className="font-semibold text-sm">
+																{toolName}
+															</h4>
+															<Badge variant="outline" className="text-xs">
+																{description.length} chars
+															</Badge>
+														</div>
+														<div className="p-3 rounded-md bg-muted">
+															<p className="text-sm whitespace-pre-wrap">
+																{description}
 															</p>
 														</div>
-													)}
-													<div className={`p-3 rounded-md ${isModified ? 'bg-green-50 border border-green-200' : 'bg-muted'}`}>
-														{isModified && (
-															<p className="text-xs text-green-700 font-semibold mb-1">
-																Current:
-															</p>
-														)}
-														<p className={`text-sm whitespace-pre-wrap ${isModified ? 'text-green-900' : ''}`}>
-															{description}
-														</p>
 													</div>
-												</div>
-											);
-										}
-									)}
+												);
+											}
+										)}
+									</div>
 								</div>
-							</CardContent>
-						)}
+							</div>
+						</CardContent>
 					</Card>
 				);
 			})}
+			</div>
 		</div>
 	);
 }
@@ -248,23 +186,11 @@ export function ResultsPanel({ candidates }: ResultsPanelProps) {
 		);
 	}
 
+	// Detect optimizer type: if any candidate has parentId, it's GEPA, otherwise Golden
+	const isGEPA = candidates.some(c => c.parentId !== undefined && c.parentId !== null);
+
 	// Calculate global Pareto front
 	const paretoFront = calculateParetoFront(candidates);
-	const paretoIds = new Set(paretoFront.map((c) => c.id));
-
-	// Find recommended candidates
-	const bestAccuracy = paretoFront.reduce((best, curr) =>
-		curr.accuracy > best.accuracy ? curr : best,
-	);
-	const mostCompact = paretoFront.reduce((best, curr) =>
-		curr.avgDescriptionLength < best.avgDescriptionLength ? curr : best,
-	);
-	// Best balance: closest to top-left corner (high accuracy, low length)
-	const bestBalance = paretoFront.reduce((best, curr) => {
-		const currScore = curr.accuracy / 100 - curr.avgDescriptionLength / 200;
-		const bestScore = best.accuracy / 100 - best.avgDescriptionLength / 200;
-		return currScore > bestScore ? curr : best;
-	});
 
 	return (
 		<div className="space-y-6 p-6">
@@ -275,94 +201,48 @@ export function ResultsPanel({ candidates }: ResultsPanelProps) {
 				</p>
 			</div>
 
-			{/* Recommended Candidates Summary */}
-			<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-				<Card className="border-2 border-green-500">
-					<CardHeader>
-						<CardTitle className="text-lg">Best Accuracy</CardTitle>
-					</CardHeader>
-					<CardContent>
-						<div className="space-y-1">
-							<p className="text-3xl font-bold">
-								{(bestAccuracy.accuracy * 100).toFixed(1)}%
-							</p>
+			<Tabs defaultValue="ranked" className="w-full">
+				<TabsList className="w-full">
+					<TabsTrigger value="ranked" className="flex-1">
+						Ranked List
+					</TabsTrigger>
+					<TabsTrigger value="graph" className="flex-1">
+						Evolution Graph
+					</TabsTrigger>
+				</TabsList>
+
+				<TabsContent value="ranked">
+					{/* Ranked Candidate List */}
+					<Card>
+						<CardHeader>
+							<CardTitle>Results Ranked by Score</CardTitle>
 							<p className="text-sm text-muted-foreground">
-								{Math.round(bestAccuracy.avgDescriptionLength)} chars avg length
+								Adjust the slider to balance between accuracy and conciseness
 							</p>
-							<p className="text-xs text-muted-foreground mt-2">
-								Iteration {bestAccuracy.iteration ?? bestAccuracy.generation ?? 0}
-							</p>
-						</div>
-					</CardContent>
-				</Card>
+						</CardHeader>
+						<CardContent>
+							<RankedCandidateList candidates={candidates} isGEPA={isGEPA} />
+						</CardContent>
+					</Card>
+				</TabsContent>
 
-				<Card className="border-2 border-blue-500">
-					<CardHeader>
-						<CardTitle className="text-lg">Best Balance</CardTitle>
-					</CardHeader>
-					<CardContent>
-						<div className="space-y-1">
-							<p className="text-3xl font-bold">
-								{(bestBalance.accuracy * 100).toFixed(1)}%
-							</p>
+				<TabsContent value="graph">
+					<Card>
+						<CardHeader>
+							<CardTitle>Candidate Evolution Graph</CardTitle>
 							<p className="text-sm text-muted-foreground">
-								{Math.round(bestBalance.avgDescriptionLength)} chars avg length
+								Interactive tree showing how candidates evolved through optimization
 							</p>
-							<p className="text-xs text-muted-foreground mt-2">
-								Iteration {bestBalance.iteration ?? bestBalance.generation ?? 0}
-							</p>
-						</div>
-					</CardContent>
-				</Card>
-
-				<Card className="border-2 border-purple-500">
-					<CardHeader>
-						<CardTitle className="text-lg">Most Compact</CardTitle>
-					</CardHeader>
-					<CardContent>
-						<div className="space-y-1">
-							<p className="text-3xl font-bold">
-								{(mostCompact.accuracy * 100).toFixed(1)}%
-							</p>
-							<p className="text-sm text-muted-foreground">
-								{Math.round(mostCompact.avgDescriptionLength)} chars avg length
-							</p>
-							<p className="text-xs text-muted-foreground mt-2">
-								Iteration {mostCompact.iteration ?? mostCompact.generation ?? 0}
-							</p>
-						</div>
-					</CardContent>
-				</Card>
-			</div>
-
-			{/* Candidate Evolution Timeline */}
-			<Card>
-				<CardHeader>
-					<CardTitle>Candidate Evolution</CardTitle>
-					<p className="text-sm text-muted-foreground">
-						Track how tool descriptions evolved through the optimization process
-					</p>
-				</CardHeader>
-				<CardContent>
-					<CandidateEvolutionView candidates={candidates} />
-				</CardContent>
-			</Card>
-
-			{/* Pareto Front Visualization */}
-			<Card>
-				<CardHeader>
-					<CardTitle>Pareto Front: Accuracy vs Description Length</CardTitle>
-				</CardHeader>
-				<CardContent>
-					<ParetoScatterPlot
-						candidates={candidates}
-						paretoIds={paretoIds}
-						bestAccuracy={bestAccuracy}
-						bestBalance={bestBalance}
-						mostCompact={mostCompact}
-					/>
-				</CardContent>
-			</Card>
+						</CardHeader>
+						<CardContent>
+							<CandidateFlowGraph
+								candidates={candidates}
+								liveMode={false}
+							/>
+						</CardContent>
+					</Card>
+				</TabsContent>
+			</Tabs>
 		</div>
 	);
 }
@@ -377,185 +257,4 @@ function dominates(a: CandidateData, b: CandidateData): boolean {
 	const aStrictlyBetter =
 		a.accuracy > b.accuracy || a.avgDescriptionLength < b.avgDescriptionLength;
 	return aAccBetter && aLengthBetter && aStrictlyBetter;
-}
-
-function ParetoScatterPlot({
-	candidates,
-	paretoIds,
-	bestAccuracy,
-	bestBalance,
-	mostCompact,
-}: {
-	candidates: CandidateData[];
-	paretoIds: Set<string>;
-	bestAccuracy: CandidateData;
-	bestBalance: CandidateData;
-	mostCompact: CandidateData;
-}) {
-	// Prepare data for recharts
-	const chartData = candidates.map((candidate) => ({
-		accuracy: candidate.accuracy * 100, // Convert to percentage
-		avgLength: candidate.avgDescriptionLength,
-		id: candidate.id,
-		isPareto: paretoIds.has(candidate.id),
-		isBestAccuracy: candidate.id === bestAccuracy.id,
-		isBestBalance: candidate.id === bestBalance.id,
-		isMostCompact: candidate.id === mostCompact.id,
-	}));
-
-	// Split into datasets for different colors
-	const nonParetoData = chartData.filter((d) => !d.isPareto);
-	const paretoData = chartData.filter(
-		(d) =>
-			d.isPareto && !d.isBestAccuracy && !d.isBestBalance && !d.isMostCompact,
-	);
-	const bestAccuracyData = chartData.filter((d) => d.isBestAccuracy);
-	const bestBalanceData = chartData.filter((d) => d.isBestBalance);
-	const mostCompactData = chartData.filter((d) => d.isMostCompact);
-
-	// Calculate axis domains based on actual data range
-	const accuracies = chartData.map(d => d.accuracy);
-	const lengths = chartData.map(d => d.avgLength);
-
-	const minAccuracy = Math.min(...accuracies);
-	const maxAccuracy = Math.max(...accuracies);
-	const minLength = Math.min(...lengths);
-	const maxLength = Math.max(...lengths);
-
-	// Add significant padding to the ranges for better visualization
-	const accuracyRange = maxAccuracy - minAccuracy;
-	const lengthRange = maxLength - minLength;
-
-	// Use at least 20% of the value or 5 units, whichever is larger
-	const accuracyPadding = Math.max(accuracyRange * 0.2, Math.max(minAccuracy * 0.2, 5));
-	const lengthPadding = Math.max(lengthRange * 0.2, Math.max(minLength * 0.2, 5));
-
-	const yMin = Math.max(0, minAccuracy - accuracyPadding);
-	const yMax = Math.min(100, maxAccuracy + accuracyPadding);
-	const xMin = Math.max(0, minLength - lengthPadding);
-	const xMax = maxLength + lengthPadding;
-
-	console.log('Chart data range:', {
-		accuracy: { min: minAccuracy, max: maxAccuracy, domain: [yMin, yMax] },
-		length: { min: minLength, max: maxLength, domain: [xMin, xMax] },
-		dataPoints: chartData.length
-	});
-
-	const chartConfig = {
-		accuracy: {
-			label: "Accuracy",
-		},
-		avgLength: {
-			label: "Avg Description Length",
-		},
-	};
-
-	return (
-		<ChartContainer config={chartConfig} className="h-[400px] w-full">
-			<ScatterChart
-				margin={{
-					top: 20,
-					right: 20,
-					bottom: 60,
-					left: 60,
-				}}
-			>
-				<CartesianGrid strokeDasharray="3 3" />
-				<XAxis
-					type="number"
-					dataKey="avgLength"
-					name="Avg Description Length"
-					domain={[xMin, xMax]}
-					allowDataOverflow={false}
-					scale="linear"
-					label={{
-						value: "Average Description Length (chars)",
-						position: "bottom",
-						offset: 40,
-					}}
-				/>
-				<YAxis
-					type="number"
-					dataKey="accuracy"
-					name="Accuracy"
-					domain={[yMin, yMax]}
-					allowDataOverflow={false}
-					scale="linear"
-					label={{
-						value: "Accuracy (%)",
-						angle: -90,
-						position: "left",
-						offset: 40,
-					}}
-				/>
-				<ChartTooltip
-					cursor={{ strokeDasharray: "3 3" }}
-					content={
-						<ChartTooltipContent
-							formatter={(value, name) => {
-								if (name === "accuracy") {
-									return `${Number(value).toFixed(1)}%`;
-								}
-								return `${Math.round(Number(value))} chars`;
-							}}
-						/>
-					}
-				/>
-
-				{/* Non-Pareto candidates (gray) */}
-				{nonParetoData.length > 0 && (
-					<Scatter
-						key="scatter-non-pareto"
-						name="Non-Pareto"
-						data={nonParetoData}
-						fill="hsl(var(--muted-foreground))"
-						opacity={0.3}
-					/>
-				)}
-
-				{/* Regular Pareto candidates (blue) */}
-				{paretoData.length > 0 && (
-					<Scatter
-						key="scatter-pareto"
-						name="Pareto Front"
-						data={paretoData}
-						fill="hsl(var(--primary))"
-						opacity={0.7}
-					/>
-				)}
-
-				{/* Highlighted candidates */}
-				{bestAccuracyData.length > 0 && (
-					<Scatter
-						key="scatter-best-accuracy"
-						name="Best Accuracy"
-						data={bestAccuracyData}
-						fill="rgb(34, 197, 94)"
-						opacity={1}
-						shape="star"
-					/>
-				)}
-				{bestBalanceData.length > 0 && (
-					<Scatter
-						key="scatter-best-balance"
-						name="Best Balance"
-						data={bestBalanceData}
-						fill="rgb(59, 130, 246)"
-						opacity={1}
-						shape="diamond"
-					/>
-				)}
-				{mostCompactData.length > 0 && (
-					<Scatter
-						key="scatter-most-compact"
-						name="Most Compact"
-						data={mostCompactData}
-						fill="rgb(168, 85, 247)"
-						opacity={1}
-						shape="triangle"
-					/>
-				)}
-			</ScatterChart>
-		</ChartContainer>
-	);
 }

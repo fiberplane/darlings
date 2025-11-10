@@ -77,6 +77,7 @@ export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 		accuracy: originalEval.accuracy,
 		avgLength: originalEval.avgDescriptionLength,
 		isPareto: true,
+		status: "accepted",
 	});
 
 	emit({
@@ -153,6 +154,7 @@ export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 		emit({
 			type: "subsample_eval",
 			candidateId: offspring.id,
+			iteration,
 			subsampleScore,
 			parentSubsampleScore,
 			subsampleSize: subsample.length,
@@ -182,6 +184,24 @@ export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 			const reason = `Lower accuracy (${(subsampleScore * 100).toFixed(0)}% < ${(parentSubsampleScore * 100).toFixed(0)}%)`;
 
 			console.log(`GEPA: Offspring ${offspring.id} rejected - ${reason}`);
+
+			// Emit candidate_done for rejected candidate so it appears in graph
+			const rejectedToolDescriptions = Object.fromEntries(
+				offspring.tools.map((tool) => [tool.name, tool.description]),
+			);
+
+			emit({
+				type: "candidate_done",
+				candidateId: offspring.id,
+				generation: iteration,
+				toolDescriptions: rejectedToolDescriptions,
+				accuracy: subsampleScore,
+				avgLength: offspringAvgLength,
+				isPareto: false,
+				status: "rejected",
+				rejectionReason: reason,
+				parentId: parent.id,
+			});
 
 			emit({
 				type: "offspring_rejected",
@@ -233,6 +253,8 @@ export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 			avgLength: offspringEval.avgDescriptionLength,
 			toolDescriptions,
 			isPareto: true, // All accepted candidates are on some Pareto front
+			status: "accepted",
+			parentId: parent.id,
 		});
 
 		// Then emit offspring_accepted to update with GEPA-specific metadata

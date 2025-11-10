@@ -4,7 +4,7 @@ import {
 	QueryClientProvider,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { OptimizationConfig, ProgressEvent } from "../types";
 import { Alert, AlertDescription, AlertTitle } from "./components/alert";
@@ -22,6 +22,7 @@ import {
 	useCandidates,
 	useReconnectToRun,
 	useStartOptimization,
+	type CandidateData,
 } from "./queries";
 import { api } from "./queries/api";
 
@@ -197,6 +198,125 @@ function App() {
 		qc.invalidateQueries({ queryKey: ["candidates", runId] });
 	};
 
+	// Build live candidates from events for graph visualization
+	const liveCandidates = useMemo(() => {
+		const candidatesMap = new Map<string, CandidateData>();
+		const parentMap = new Map<string, string>();
+		const rejectedMap = new Map<string, { reason: string; iteration: number }>();
+		const reflectionMap = new Map<string, Record<string, string>>();
+
+		// First pass: collect all events
+		for (const event of events) {
+			// Accepted candidates (have full evaluation)
+			if (event.type === "candidate_done") {
+				candidatesMap.set(event.candidateId, {
+					id: event.candidateId,
+					generation: event.generation ?? 0,
+					iteration: event.generation ?? 0,
+					parentId: null, // Will be filled in next pass
+					toolDescriptions: event.toolDescriptions,
+					accuracy: event.accuracy,
+					avgDescriptionLength: event.avgLength,
+					isPareto: event.isPareto,
+					rejected: false,
+				});
+			}
+
+			// Track parent relationships from offspring_accepted events
+			if (event.type === "offspring_accepted") {
+				parentMap.set(event.candidateId, event.parentId);
+			}
+
+			// Track rejected offspring
+			if (event.type === "offspring_rejected") {
+				rejectedMap.set(event.candidateId, {
+					reason: event.reason,
+					iteration: event.iteration,
+				});
+			}
+
+			// Track reflection results (tool descriptions for rejected candidates)
+			if (event.type === "reflection_done") {
+				const existing = reflectionMap.get(event.candidateId) || {};
+				existing[event.tool] = event.newDesc;
+				reflectionMap.set(event.candidateId, existing);
+			}
+		}
+
+		// Second pass: fill in parent IDs for accepted candidates
+		for (const [candidateId, parentId] of parentMap.entries()) {
+			const candidate = candidatesMap.get(candidateId);
+			if (candidate) {
+				candidate.parentId = parentId;
+			}
+		}
+
+		// Third pass: create rejected candidates
+		for (const [candidateId, rejectionInfo] of rejectedMap.entries()) {
+			// Skip if already added as accepted
+			if (candidatesMap.has(candidateId)) continue;
+
+			const toolDescriptions = reflectionMap.get(candidateId) || {};
+			const avgLength =
+				Object.keys(toolDescriptions).length > 0
+					? Object.values(toolDescriptions).reduce(
+							(sum, desc) => sum + desc.length,
+							0,
+						) / Object.keys(toolDescriptions).length
+					: 0;
+
+			// Find parent from parent_selected event
+			let parentId: string | null = null;
+			for (const event of events) {
+				if (
+					event.type === "parent_selected" &&
+					event.iteration === rejectionInfo.iteration
+				) {
+					parentId = event.candidateId;
+					break;
+				}
+			}
+
+			candidatesMap.set(candidateId, {
+				id: candidateId,
+				generation: rejectionInfo.iteration,
+				iteration: rejectionInfo.iteration,
+				parentId,
+				toolDescriptions,
+				accuracy: 0, // Rejected before full eval
+				avgDescriptionLength: avgLength,
+				isPareto: false,
+				rejected: true,
+				rejectionReason: rejectionInfo.reason,
+			});
+		}
+
+		return Array.from(candidatesMap.values());
+	}, [events]);
+
+	// Track currently evaluating candidate
+	const currentlyEvaluatingId = useMemo(() => {
+		// Find the most recent candidate_start event without a matching candidate_done
+		const startEvents = events.filter((e) => e.type === "candidate_start");
+		const doneEvents = new Set(
+			events
+				.filter((e) => e.type === "candidate_done")
+				.map((e) => e.candidateId),
+		);
+
+		// Find the last started candidate that hasn't completed yet
+		for (let i = startEvents.length - 1; i >= 0; i--) {
+			const event = startEvents[i];
+			if (event && event.type === "candidate_start") {
+				if (!doneEvents.has(event.candidateId)) {
+					return event.candidateId;
+				}
+			}
+		}
+
+		return undefined;
+	}, [events]);
+
 	return (
 		<div className="h-screen flex flex-col bg-background overflow-hidden">
 			<Card className="rounded-none border-x-0 border-t-0 shadow-lg bg-primary text-primary-foreground flex-shrink-0">
@@ -272,7 +392,11 @@ function App() {
 							<ResultsPanel candidates={candidates} />
 						</div>
 					) : events.length > 0 ? (
-						<SimpleIterationView events={events} />
+						<SimpleIterationView
+							events={events}
+							liveCandidates={liveCandidates}
+							currentlyEvaluatingId={currentlyEvaluatingId}
+						/>
 					) : (
 						<div className="flex items-center justify-center h-full text-muted-foreground">
 							Start an optimization to see the evolution process
