@@ -146,3 +146,113 @@ export function selectParentWeighted(
 	if (!lastCandidate) return null;
 	return archive.candidates.get(lastCandidate.id) ?? null;
 }
+
+/**
+ * Calculate maximum average description length across all candidates in archive
+ * Used for normalizing conciseness scores
+ */
+function calculateMaxLength(archive: Archive): number {
+	let maxLength = 0;
+	for (const candidate of archive.candidates.values()) {
+		if (candidate.avgDescriptionLength > maxLength) {
+			maxLength = candidate.avgDescriptionLength;
+		}
+	}
+	return maxLength;
+}
+
+/**
+ * Calculate conciseness score normalized to [0, 1]
+ * Shorter descriptions get higher scores
+ */
+function calculateConcisenessScore(
+	avgLength: number,
+	maxLength: number,
+): number {
+	if (maxLength === 0) return 1.0;
+	const score = 1 - avgLength / maxLength;
+	return Math.max(0, Math.min(1, score)); // Clamp to [0, 1]
+}
+
+/**
+ * Calculate global weighted score combining accuracy and conciseness
+ * Score = accuracy * accuracyWeight + concisenessScore * (1 - accuracyWeight)
+ * Both components normalized to [0, 1], result is also in [0, 1]
+ */
+function calculateGlobalScore(
+	candidate: EvaluatedCandidate,
+	maxLength: number,
+	accuracyWeight: number,
+): number {
+	const concisenessScore = calculateConcisenessScore(
+		candidate.avgDescriptionLength,
+		maxLength,
+	);
+	return (
+		candidate.accuracy * accuracyWeight +
+		concisenessScore * (1 - accuracyWeight)
+	);
+}
+
+/**
+ * Select parent using weighted sampling based on global scores
+ * Global score combines accuracy and conciseness using accuracyWeight
+ * Temperature controls exploration: higher = more uniform, lower = more greedy
+ * Only candidates meeting minAccuracy threshold are eligible for selection
+ */
+export function selectParentWeightedByGlobalScore(
+	archive: Archive,
+	accuracyWeight: number,
+	temperature: number,
+	minAccuracy: number,
+): EvaluatedCandidate | null {
+	let candidates = Array.from(archive.candidates.values());
+	if (candidates.length === 0) return null;
+
+	// Filter candidates by minimum accuracy threshold
+	const qualifiedCandidates = candidates.filter(
+		(c) => c.accuracy >= minAccuracy,
+	);
+
+	// If no candidates meet threshold, fall back to all candidates
+	// (This can happen early in optimization when only baseline exists)
+	if (qualifiedCandidates.length > 0) {
+		candidates = qualifiedCandidates;
+	}
+
+	// Calculate max length for normalization
+	const maxLength = calculateMaxLength(archive);
+
+	// Calculate global score for each candidate
+	const candidatesWithScores = candidates.map((candidate) => ({
+		candidate,
+		score: calculateGlobalScore(candidate, maxLength, accuracyWeight),
+	}));
+
+	// Apply exponential weighting with temperature
+	// temperature = 1.0: linear weighting on scores
+	// temperature > 1.0: more exploration (flatter distribution)
+	// temperature < 1.0: more exploitation (sharper distribution)
+	const weights = candidatesWithScores.map(({ score }) =>
+		Math.exp(score / temperature),
+	);
+	const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+
+	// Sample using cumulative probabilities
+	const rand = Math.random() * totalWeight;
+	let cumulative = 0;
+	for (let i = 0; i < candidatesWithScores.length; i++) {
+		const weight = weights[i];
+		const item = candidatesWithScores[i];
+		if (weight === undefined || item === undefined) continue;
+
+		cumulative += weight;
+		if (rand <= cumulative) {
+			return item.candidate;
+		}
+	}
+
+	// Fallback (shouldn't reach here, but just in case)
+	const lastItem = candidatesWithScores[candidatesWithScores.length - 1];
+	return lastItem?.candidate ?? null;
+}

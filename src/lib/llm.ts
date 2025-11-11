@@ -88,6 +88,10 @@ export async function evaluateWithTools(
 			temperature: 0, // Deterministic evaluation for consistent results
 		});
 
+		// Log agent turns - checking what's available in result
+		console.log(`    Agent turns: ${result.steps?.length ?? "N/A"} steps | Usage: ${JSON.stringify(result.usage)}`);
+		console.log(`    Response parts: ${result.response?.messages?.length ?? 0} messages, ${result.toolCalls?.length ?? 0} tool calls`);
+
 		// Extract tool call from response
 		const toolCall = result.toolCalls?.[0];
 

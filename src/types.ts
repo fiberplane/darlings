@@ -181,7 +181,7 @@ export type ProgressEvent =
 			type: "parent_selected";
 			candidateId: string;
 			iteration: number;
-			dominanceCount: number;
+			globalScore: number;
 	  }
 	| {
 			type: "subsample_eval";

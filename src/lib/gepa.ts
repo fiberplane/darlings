@@ -6,7 +6,7 @@ import { evaluateCandidate } from "./evaluator";
 import { mutateViaReflection } from "./mutator";
 import {
 	createPerTaskPareto,
-	selectParentWeighted,
+	selectParentWeightedByGlobalScore,
 	updatePerTaskPareto,
 } from "./pareto";
 import {
@@ -99,6 +99,9 @@ export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 	console.log(
 		`GEPA: Multi-objective config - Min Accuracy: ${((config.minAccuracy ?? 0) * 100).toFixed(0)}%, Accuracy Weight: ${((config.accuracyWeight ?? 0.5) * 100).toFixed(0)}%, Selection Temp: ${(config.selectionTemperature ?? 1.0).toFixed(1)}`,
 	);
+	console.log(
+		`GEPA: Parent selection will only consider candidates with accuracy >= ${((config.minAccuracy ?? 0) * 100).toFixed(0)}%`,
+	);
 
 	// Main GEPA loop - continuous until budget exhausted
 	while (totalEvaluations < config.maxEvaluations) {
@@ -109,25 +112,41 @@ export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 
 		emit({ type: "iteration_start", iteration, totalEvaluations });
 
-		// 1. Select parent (weighted by dominance count, with temperature for exploration/exploitation)
+		// 1. Select parent (weighted by global score combining accuracy + conciseness)
 		// Clamp temperature to avoid division by zero (min 0.1 for maximum exploitation)
 		const selectionTemp = Math.max(0.1, config.selectionTemperature ?? 1.0);
-		const parent = selectParentWeighted(perTaskPareto, archive, selectionTemp);
+		const accuracyWeight = config.accuracyWeight ?? 0.5;
+		const minAccuracy = config.minAccuracy ?? 0;
+		const parent = selectParentWeightedByGlobalScore(
+			archive,
+			accuracyWeight,
+			selectionTemp,
+			minAccuracy,
+		);
 		if (!parent) {
 			console.log("GEPA: No parent available, stopping");
 			break;
 		}
 
-		const dominanceCount = perTaskPareto.dominanceCount.get(parent.id) || 0;
+		// Calculate parent's global score for logging and events
+		const maxLength = Math.max(
+			...Array.from(archive.candidates.values()).map(
+				(c) => c.avgDescriptionLength,
+			),
+		);
+		const concisenessScore = 1 - parent.avgDescriptionLength / maxLength;
+		const globalScore =
+			parent.accuracy * accuracyWeight + concisenessScore * (1 - accuracyWeight);
+
 		emit({
 			type: "parent_selected",
 			candidateId: parent.id,
 			iteration,
-			dominanceCount,
+			globalScore,
 		});
 
 		console.log(
-			`\n[1. Parent Selection]\nSelected: ${parent.id.slice(0, 8)}\nAccuracy: ${(parent.accuracy * 100).toFixed(1)}%\nDominance: ${dominanceCount} tasks\nAvg Length: ${parent.avgDescriptionLength.toFixed(0)} chars`,
+			`\n[1. Parent Selection]\nSelected: ${parent.id.slice(0, 8)}\nAccuracy: ${(parent.accuracy * 100).toFixed(1)}%\nGlobal Score: ${globalScore.toFixed(3)} (acc: ${(parent.accuracy * accuracyWeight).toFixed(3)}, concise: ${(concisenessScore * (1 - accuracyWeight)).toFixed(3)})\nAvg Length: ${parent.avgDescriptionLength.toFixed(0)} chars`,
 		);
 
 		// 2. Mutate parent
