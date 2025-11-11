@@ -27,6 +27,11 @@ import {
 export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 	const emit = (event: ProgressEvent) => config.onProgress(event);
 
+	// Validate configuration
+	if (config.testCases.length === 0) {
+		throw new Error("GEPA requires test cases. Please generate test cases before starting optimization.");
+	}
+
 	// Create rate limiter
 	const limit = createEvaluationLimiter({
 		maxConcurrentEvaluations: config.maxConcurrentEvaluations,
@@ -51,7 +56,7 @@ export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 	const originalEval = await evaluateCandidate(
 		original,
 		config.testCases,
-		config.model,
+		config.evaluationModel,
 		emit,
 		limit,
 	);
@@ -91,6 +96,9 @@ export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 	console.log(
 		`GEPA: Starting optimization with budget ${config.maxEvaluations}`,
 	);
+	console.log(
+		`GEPA: Multi-objective config - Min Accuracy: ${((config.minAccuracy ?? 0) * 100).toFixed(0)}%, Accuracy Weight: ${((config.accuracyWeight ?? 0.5) * 100).toFixed(0)}%, Selection Temp: ${(config.selectionTemperature ?? 1.0).toFixed(1)}`,
+	);
 
 	// Main GEPA loop - continuous until budget exhausted
 	while (totalEvaluations < config.maxEvaluations) {
@@ -101,8 +109,10 @@ export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 
 		emit({ type: "iteration_start", iteration, totalEvaluations });
 
-		// 1. Select parent (weighted by dominance count)
-		const parent = selectParentWeighted(perTaskPareto, archive);
+		// 1. Select parent (weighted by dominance count, with temperature for exploration/exploitation)
+		// Clamp temperature to avoid division by zero (min 0.1 for maximum exploitation)
+		const selectionTemp = Math.max(0.1, config.selectionTemperature ?? 1.0);
+		const parent = selectParentWeighted(perTaskPareto, archive, selectionTemp);
 		if (!parent) {
 			console.log("GEPA: No parent available, stopping");
 			break;
@@ -126,7 +136,7 @@ export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 		const offspring = await mutateViaReflection(
 			parent,
 			config.testCases,
-			config.model,
+			config.generationModel,
 			emit,
 		);
 		console.log(`Generated offspring: ${offspring.id.slice(0, 8)}`);
@@ -137,7 +147,7 @@ export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 		const subsampleScore = await evaluateOnSubsample(
 			offspring,
 			subsample,
-			config.model,
+			config.evaluationModel,
 			limit,
 		);
 		const parentSubsampleScore = getParentSubsampleScore(parent, subsample);
@@ -166,22 +176,26 @@ export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 
 		// 4. Acceptance check
 		// Accept if accuracy improved OR stayed same (let full eval and Pareto front decide)
+		const minAccuracyThreshold = config.minAccuracy ?? 0;
 		const accuracyImproved = subsampleScore > parentSubsampleScore;
 		const accuracyEqual =
 			Math.abs(subsampleScore - parentSubsampleScore) < 0.001;
 		const accuracyWorse = subsampleScore < parentSubsampleScore - 0.001;
+		const belowMinAccuracy = subsampleScore < minAccuracyThreshold;
 
 		console.log(
-			`GEPA: Decision - Improved: ${accuracyImproved}, Equal: ${accuracyEqual}, Worse: ${accuracyWorse}`,
+			`GEPA: Decision - Improved: ${accuracyImproved}, Equal: ${accuracyEqual}, Worse: ${accuracyWorse}, Below Min: ${belowMinAccuracy} (threshold: ${(minAccuracyThreshold * 100).toFixed(0)}%)`,
 		);
 		console.log(
 			`  Lengths: Offspring ${offspringAvgLength.toFixed(0)} vs Parent ${parentAvgLength.toFixed(0)} chars`,
 		);
 
-		// Only reject if accuracy got WORSE on subsample
-		if (accuracyWorse) {
+		// Reject if accuracy got WORSE on subsample OR below minimum threshold
+		if (accuracyWorse || belowMinAccuracy) {
 			rejectedCount++;
-			const reason = `Lower accuracy (${(subsampleScore * 100).toFixed(0)}% < ${(parentSubsampleScore * 100).toFixed(0)}%)`;
+			const reason = belowMinAccuracy
+				? `Below minimum accuracy (${(subsampleScore * 100).toFixed(0)}% < ${(minAccuracyThreshold * 100).toFixed(0)}% threshold)`
+				: `Lower accuracy (${(subsampleScore * 100).toFixed(0)}% < ${(parentSubsampleScore * 100).toFixed(0)}%)`;
 
 			console.log(`GEPA: Offspring ${offspring.id} rejected - ${reason}`);
 
@@ -228,7 +242,7 @@ export async function runGEPA(config: GEPAConfig): Promise<Archive> {
 		const offspringEval = await evaluateCandidate(
 			offspring,
 			config.testCases,
-			config.model,
+			config.evaluationModel,
 			emit,
 			limit,
 		);

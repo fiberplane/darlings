@@ -21,8 +21,9 @@ export async function runGoldenOptimizer(
 	console.log("\n=== GOLDEN SET OPTIMIZER STARTED ===");
 	console.log(`Run ID: ${config.runId}`);
 	console.log(
-		`Model: ${config.model}, Concurrent evals: ${config.maxConcurrentEvaluations}`,
+		`Evaluation model: ${config.evaluationModel}, Generation model: ${config.generationModel}`,
 	);
+	console.log(`Concurrent evals: ${config.maxConcurrentEvaluations}`);
 	console.log(`Tools: ${config.tools.length}`);
 	console.log(
 		`Test cases per category: ${config.testCasesPerCategory} (direct/indirect/negative)`,
@@ -47,7 +48,7 @@ export async function runGoldenOptimizer(
 	const goldenTestCases = await generateGoldenTestSet(
 		config.tools,
 		config.testCasesPerCategory,
-		config.model,
+		config.generationModel,
 	);
 
 	for (const testCase of goldenTestCases) {
@@ -95,7 +96,7 @@ export async function runGoldenOptimizer(
 	const candidatesWithTypes = await generateCandidates(
 		config.tools,
 		config.candidateCount,
-		config.model,
+		config.generationModel,
 	);
 
 	for (const { candidate, variationType } of candidatesWithTypes) {
@@ -143,7 +144,7 @@ export async function runGoldenOptimizer(
 		const evaluated = await evaluateCandidate(
 			candidate,
 			testCases,
-			config.model,
+			config.evaluationModel,
 			emit,
 			limit,
 		);

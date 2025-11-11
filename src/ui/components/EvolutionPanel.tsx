@@ -89,6 +89,8 @@ export function EvolutionPanel({ candidates }: EvolutionPanelProps) {
 										const bestCandidate = genCandidates[0];
 										const isExpanded = expandedGen === generation;
 
+										if (!bestCandidate) return null;
+
 										return (
 											<div key={generation} className="border rounded-lg">
 												<Button
@@ -164,7 +166,7 @@ export function EvolutionPanel({ candidates }: EvolutionPanelProps) {
 									<ToolEvolution
 										toolName={selectedTool}
 										generationData={generationData}
-										baseline={baselineDescriptions[selectedTool]}
+										baseline={baselineDescriptions[selectedTool] ?? ""}
 									/>
 								) : (
 									<div className="flex items-center justify-center h-full text-muted-foreground">

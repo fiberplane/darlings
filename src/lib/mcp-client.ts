@@ -101,15 +101,15 @@ export async function listTools(client: Client): Promise<Tool[]> {
 
 	console.log("=== RAW TOOLS RESULT FROM MCP CLIENT ===");
 	console.log("Type:", typeof toolsResult);
-	console.log("Tools array length:", toolsResult.tools?.length || 0);
+	console.log("Tools array length:", toolsResult?.tools?.length || 0);
 	console.log(
 		"First tool:",
-		JSON.stringify(toolsResult.tools?.[0], null, 2) || "none",
+		toolsResult?.tools?.[0] ? JSON.stringify(toolsResult.tools[0], null, 2) : "none",
 	);
 	console.log("=== END RAW TOOLS ===\n");
 
 	// MCP SDK returns { tools: [...] } format
-	return (toolsResult.tools || []).map((tool) => ({
+	return (toolsResult?.tools || []).map((tool) => ({
 		id: crypto.randomUUID(),
 		name: tool.name,
 		description: tool.description || "",

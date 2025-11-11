@@ -4,7 +4,7 @@ import {
 	QueryClientProvider,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { OptimizationConfig, ProgressEvent } from "../types";
 import { Alert, AlertDescription, AlertTitle } from "./components/alert";

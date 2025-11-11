@@ -87,7 +87,9 @@ export function IterationDetail({
 		if (parentDoneEvent) {
 			parentCandidate = {
 				id: parentDoneEvent.candidateId,
-				generation: parentDoneEvent.generation,
+				generation: parentDoneEvent.generation ?? 0,
+				iteration: null,
+				parentId: null,
 				toolDescriptions: parentDoneEvent.toolDescriptions,
 				accuracy: parentDoneEvent.accuracy,
 				avgDescriptionLength: parentDoneEvent.avgLength,

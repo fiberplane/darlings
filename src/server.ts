@@ -1436,7 +1436,8 @@ async function handleStartOptimization(
 					await runGoldenOptimizer({
 						runId,
 						tools,
-						model: config.model,
+						evaluationModel: config.evaluationModel,
+						generationModel: config.generationModel,
 						maxConcurrentEvaluations: config.maxConcurrentEvaluations,
 						testCasesPerCategory: config.testCasesPerCategory || 10,
 						candidateCount: config.candidateCount || 10,
@@ -1505,7 +1506,9 @@ async function handleStartOptimization(
 									candidateId: event.candidateId,
 									testCaseId: event.testCase, // Using query as testCaseId
 									selectedTool: event.result.selected,
+									expectedTool: event.result.expected,
 									correct: event.result.correct,
+									timestamp: new Date(),
 								});
 							}
 						},
@@ -1567,7 +1570,9 @@ async function handleStartOptimization(
 									candidateId: event.candidateId,
 									testCaseId: event.testCase, // Using query as testCaseId
 									selectedTool: event.result.selected,
+									expectedTool: event.result.expected,
 									correct: event.result.correct,
+									timestamp: new Date(),
 								});
 							}
 
@@ -1900,7 +1905,7 @@ async function handleGetCandidates(
 			const evaluations = evaluationsData.map((e) => ({
 				testCaseId: e.testCaseId ?? "",
 				selectedTool: e.selectedTool,
-				expectedTool: "", // We don't store this separately, could derive from testCase
+				expectedTool: e.expectedTool ?? "",
 				correct: e.correct,
 			}));
 

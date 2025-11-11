@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { MODEL_PROVIDERS } from "../../lib/constants";
 import type { MCPConfig, ModelName, OptimizationConfig } from "../../types";
 import {
@@ -86,6 +86,78 @@ function formatModelName(modelName: string): string {
 		.replace(/(\d+) (\d+)/g, "$1.$2"); // Convert "4 5" to "4.5"
 }
 
+interface JSONSchemaProperty {
+	type?: string;
+	description?: string;
+	items?: JSONSchemaProperty;
+	properties?: Record<string, JSONSchemaProperty>;
+	enum?: string[];
+	default?: unknown;
+}
+
+interface JSONSchema {
+	type?: string;
+	properties?: Record<string, JSONSchemaProperty>;
+	required?: string[];
+}
+
+function formatJSONSchemaForDisplay(inputSchema: Record<string, unknown> | string): string {
+	// Handle case where inputSchema might be a string
+	let schema: JSONSchema;
+	if (typeof inputSchema === "string") {
+		try {
+			schema = JSON.parse(inputSchema);
+		} catch {
+			return "Invalid schema format";
+		}
+	} else {
+		schema = inputSchema as JSONSchema;
+	}
+
+	// Check if this is a JSON Schema object with properties
+	if (!schema || typeof schema !== "object") {
+		return "No parameters";
+	}
+
+	// If there are no properties, check if this is the schema itself
+	const properties = schema.properties || (schema.type === "object" ? {} : null);
+
+	if (!properties || Object.keys(properties).length === 0) {
+		return "No parameters";
+	}
+
+	const formatProperty = (name: string, prop: JSONSchemaProperty, isRequired: boolean): string => {
+		const parts: string[] = [];
+
+		parts.push(`• ${name}`);
+
+		if (prop.type) {
+			parts.push(` (${prop.type}${isRequired ? ", required" : ""})`);
+		}
+
+		if (prop.description) {
+			parts.push(`\n  ${prop.description}`);
+		}
+
+		if (prop.enum) {
+			parts.push(`\n  Options: ${prop.enum.join(", ")}`);
+		}
+
+		if (prop.default !== undefined) {
+			parts.push(`\n  Default: ${JSON.stringify(prop.default)}`);
+		}
+
+		return parts.join("");
+	};
+
+	const required = new Set(schema.required || []);
+	const entries = Object.entries(properties);
+
+	return entries
+		.map(([name, prop]) => formatProperty(name, prop, required.has(name)))
+		.join("\n\n");
+}
+
 export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 	const [selectedServer, setSelectedServer] = useState<string>("");
 
@@ -96,9 +168,14 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 	const [testsPerTool, setTestsPerTool] = useState(5);
 	const [testCasesPerCategory, setTestCasesPerCategory] = useState(10);
 	const [candidateCount, setCandidateCount] = useState(10);
-	const [model, setModel] = useState<ModelName>("claude-haiku-4-5");
+	const [evaluationModel, setEvaluationModel] = useState<ModelName>("claude-haiku-4-5");
+	const [generationModel, setGenerationModel] = useState<ModelName>("claude-haiku-4-5");
 	const [maxConcurrentEvaluations, _setMaxConcurrentEvaluations] = useState(3);
 	const [customTestPrompt, setCustomTestPrompt] = useState("");
+	// Multi-objective parameters (GEPA only)
+	const [minAccuracy, setMinAccuracy] = useState(90); // 0-100 (percentage), default 90%
+	const [accuracyWeight, setAccuracyWeight] = useState(50); // 0-100 (50 = equal weight)
+	const [selectionTemperature, setSelectionTemperature] = useState(10); // 0-30 (10 = default 1.0)
 
 	// MCP connection
 	const [mcpType, setMcpType] = useState<"stdio" | "http">("http");
@@ -254,7 +331,7 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 		generateTestsMutation.mutate({
 			serverId: selectedServer,
 			testsPerTool,
-			model,
+			model: generationModel,
 			customPrompt: customTestPrompt.trim() || undefined,
 		});
 	};
@@ -320,27 +397,18 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 	};
 
 	// Filter test cases to only show those for selected tools
-	const selectedToolIds = new Set(
-		tools.filter((t) => t.optimizationStatus === "selected").map((t) => t.id),
+	const selectedToolIds = useMemo(
+		() => new Set(tools.filter((t) => t.optimizationStatus === "selected").map((t) => t.id)),
+		[tools]
 	);
-	const filteredTestCases = testCases.filter(
-		(tc) => tc.toolId && selectedToolIds.has(tc.toolId),
+	const filteredTestCases = useMemo(
+		() => testCases.filter((tc) => tc.toolId && selectedToolIds.has(tc.toolId)),
+		[testCases, selectedToolIds]
 	);
 
-	const handleStart = () => {
-		if (!selectedServer) {
-			setAlertMessage("Please connect to an MCP server first");
-			setAlertVariant("destructive");
-			return;
-		}
+	const handleStartClick = () => {
+		if (!selectedServer) return;
 
-		if (optimizer === "gepa" && filteredTestCases.length === 0) {
-			setAlertMessage("Please generate test cases first");
-			setAlertVariant("destructive");
-			return;
-		}
-
-		setAlertMessage(null);
 		onStart(selectedServer, {
 			optimizer,
 			maxEvaluations,
@@ -348,8 +416,12 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 			testsPerTool,
 			testCasesPerCategory,
 			candidateCount,
-			model,
+			evaluationModel,
+			generationModel,
 			maxConcurrentEvaluations,
+			minAccuracy: minAccuracy / 100,
+			accuracyWeight: accuracyWeight / 100,
+			selectionTemperature: selectionTemperature / 10,
 		});
 	};
 
@@ -654,12 +726,11 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 																	</div>
 																</div>
 															)}
-															{tool.inputSchema &&
-																Object.keys(tool.inputSchema).length > 0 && (
+															{tool.inputSchema && (
 																	<div className="text-sm">
 																		<div className="font-medium mb-1">Parameters:</div>
-																		<div className="text-muted-foreground font-mono text-xs max-h-48 overflow-y-auto">
-																			{JSON.stringify(tool.inputSchema, null, 2)}
+																		<div className="text-muted-foreground text-xs max-h-48 overflow-y-auto whitespace-pre-wrap">
+																			{formatJSONSchemaForDisplay(tool.inputSchema)}
 																		</div>
 																	</div>
 																)}
@@ -767,6 +838,119 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 								</p>
 							</div>
 
+							{/* Multi-objective Trade-off Controls */}
+							<div className="space-y-4 pt-2 border-t">
+								<h4 className="text-sm font-semibold">Multi-Objective Trade-offs</h4>
+
+								<div className="space-y-3">
+									<div className="flex justify-between items-center">
+										<TooltipProvider>
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<Label htmlFor="min-accuracy" className="cursor-help">
+														Minimum Accuracy
+													</Label>
+												</TooltipTrigger>
+												<TooltipContent>
+													<p>Reject candidates below this accuracy threshold</p>
+												</TooltipContent>
+											</Tooltip>
+										</TooltipProvider>
+										<span className="text-sm font-medium text-foreground">
+											{minAccuracy}%
+										</span>
+									</div>
+									<Slider
+										id="min-accuracy"
+										min={0}
+										max={100}
+										step={5}
+										value={[minAccuracy]}
+										onValueChange={(value) => {
+											const newValue = value[0];
+											if (newValue !== undefined) {
+												setMinAccuracy(newValue);
+											}
+										}}
+									/>
+									<p className="text-xs text-muted-foreground">
+										Don't accept candidates below this accuracy. 0% = no minimum (default).
+									</p>
+								</div>
+
+								<div className="space-y-3">
+									<div className="flex justify-between items-center">
+										<TooltipProvider>
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<Label htmlFor="accuracy-weight" className="cursor-help">
+														Objective Balance
+													</Label>
+												</TooltipTrigger>
+												<TooltipContent>
+													<p>Balance between accuracy and conciseness</p>
+												</TooltipContent>
+											</Tooltip>
+										</TooltipProvider>
+										<span className="text-sm font-medium text-foreground">
+											{accuracyWeight < 50 ? 'Concise' : accuracyWeight > 50 ? 'Accurate' : 'Balanced'}
+										</span>
+									</div>
+									<Slider
+										id="accuracy-weight"
+										min={0}
+										max={100}
+										step={10}
+										value={[accuracyWeight]}
+										onValueChange={(value) => {
+											const newValue = value[0];
+											if (newValue !== undefined) {
+												setAccuracyWeight(newValue);
+											}
+										}}
+									/>
+									<p className="text-xs text-muted-foreground">
+										Left = prioritize conciseness, Right = prioritize accuracy. 50% = equal weight (default).
+									</p>
+								</div>
+
+								<div className="space-y-3">
+									<div className="flex justify-between items-center">
+										<TooltipProvider>
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<Label htmlFor="selection-temp" className="cursor-help">
+														Exploration vs Exploitation
+													</Label>
+												</TooltipTrigger>
+												<TooltipContent>
+													<p>Controls diversity of solutions explored</p>
+												</TooltipContent>
+											</Tooltip>
+										</TooltipProvider>
+										<span className="text-sm font-medium text-foreground">
+											{selectionTemperature < 10 ? 'Exploit' : selectionTemperature > 10 ? 'Explore' : 'Balanced'}
+										</span>
+									</div>
+									<Slider
+										id="selection-temp"
+										min={1}
+										max={30}
+										step={2}
+										value={[selectionTemperature]}
+										onValueChange={(value) => {
+											const newValue = value[0];
+											if (newValue !== undefined) {
+												setSelectionTemperature(newValue);
+											}
+										}}
+									/>
+									<p className="text-xs text-muted-foreground">
+										Lower = exploit best solutions, Higher = explore alternatives. 10 = balanced (default). Min 1 = max exploitation.
+									</p>
+								</div>
+							</div>
+
 							<div className="space-y-3">
 								<div className="flex justify-between items-center">
 									<Label htmlFor="tests-per-tool">Auto-Generate Count</Label>
@@ -799,23 +983,6 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 								/>
 								<p className="text-xs text-muted-foreground">
 									Number of test cases to auto-generate per tool (1-50).
-								</p>
-							</div>
-
-							<div className="space-y-3">
-								<Label htmlFor="custom-test-prompt">
-									Custom Test Generation Prompt (Optional)
-								</Label>
-								<textarea
-									id="custom-test-prompt"
-									value={customTestPrompt}
-									onChange={(e) => setCustomTestPrompt(e.target.value)}
-									placeholder="Add custom instructions for test generation (e.g., 'Focus on edge cases', 'Include multi-step scenarios', etc.)"
-									className="w-full min-h-[80px] px-3 py-2 text-sm border rounded-md resize-y"
-								/>
-								<p className="text-xs text-muted-foreground">
-									Optional: Add specific instructions to guide test case generation.
-									This will be appended to the default prompt.
 								</p>
 							</div>
 						</div>
@@ -893,27 +1060,50 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 						</div>
 					)}
 
-					<div className="space-y-2 max-w-md">
-						<Label htmlFor="model">Model</Label>
-						<Select
-							value={model}
-							onValueChange={(value) => setModel(value as ModelName)}
-						>
-							<SelectTrigger id="model">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								{Object.keys(MODEL_PROVIDERS).map((modelKey) => (
-									<SelectItem key={modelKey} value={modelKey}>
-										{formatModelName(modelKey)}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
-						<p className="text-xs text-muted-foreground">
-							LLM used for test generation, evaluation, and description
-							optimization. Faster models reduce cost/time.
-						</p>
+					<div className="space-y-4">
+						<div className="space-y-2 max-w-md">
+							<Label htmlFor="evaluation-model">Evaluation Model</Label>
+							<Select
+								value={evaluationModel}
+								onValueChange={(value) => setEvaluationModel(value as ModelName)}
+							>
+								<SelectTrigger id="evaluation-model">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									{Object.keys(MODEL_PROVIDERS).map((modelKey) => (
+										<SelectItem key={modelKey} value={modelKey}>
+											{formatModelName(modelKey)}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+							<p className="text-xs text-muted-foreground">
+								LLM used for evaluating tool selection. Faster models reduce cost/time.
+							</p>
+						</div>
+
+						<div className="space-y-2 max-w-md">
+							<Label htmlFor="generation-model">Generation Model</Label>
+							<Select
+								value={generationModel}
+								onValueChange={(value) => setGenerationModel(value as ModelName)}
+							>
+								<SelectTrigger id="generation-model">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									{Object.keys(MODEL_PROVIDERS).map((modelKey) => (
+										<SelectItem key={modelKey} value={modelKey}>
+											{formatModelName(modelKey)}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+							<p className="text-xs text-muted-foreground">
+								LLM used for reflection, test generation, and mutation. Better models improve quality.
+							</p>
+						</div>
 					</div>
 				</div>
 
@@ -937,6 +1127,23 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 
 					{optimizer === "gepa" && (
 						<>
+							<div className="space-y-3">
+								<Label htmlFor="custom-test-prompt">
+									Custom Test Generation Prompt (Optional)
+								</Label>
+								<textarea
+									id="custom-test-prompt"
+									value={customTestPrompt}
+									onChange={(e) => setCustomTestPrompt(e.target.value)}
+									placeholder="Add custom instructions for test generation (e.g., 'Focus on edge cases', 'Include multi-step scenarios', etc.)"
+									className="w-full min-h-[80px] px-3 py-2 text-sm border rounded-md resize-y"
+								/>
+								<p className="text-xs text-muted-foreground">
+									Optional: Add specific instructions to guide test case generation.
+									This will be appended to the default prompt.
+								</p>
+							</div>
+
 							<div className="flex flex-wrap gap-2">
 								<Button
 									onClick={handleGenerateTests}
@@ -1037,30 +1244,22 @@ export function ConfigPanel({ onStart, onStop, isRunning }: ConfigPanelProps) {
 				</div>
 
 				<Separator />
-				<div className="space-y-4">
-					<h3 className="text-lg font-semibold">Run Optimization</h3>
-					<div className="flex gap-3">
-						{isRunning ? (
-							<Button
-								onClick={async () => {
-									await onStop();
-								}}
-								variant="destructive"
-								disabled={!isRunning}
-								className="flex-1 md:flex-initial md:min-w-[200px]"
-							>
-								Stop Optimization
-							</Button>
-						) : (
-							<Button
-								onClick={handleStart}
-								className="flex-1 md:flex-initial md:min-w-[200px]"
-							>
-								Start Optimization
-							</Button>
-						)}
-					</div>
+				<div className="flex justify-end">
+					{isRunning ? (
+						<Button onClick={onStop} variant="destructive" size="lg">
+							Stop Optimization
+						</Button>
+					) : (
+						<Button
+							onClick={handleStartClick}
+							size="lg"
+							disabled={!selectedServer}
+						>
+							Start Optimization
+						</Button>
+					)}
 				</div>
+
 			</CardContent>
 		</Card>
 	);

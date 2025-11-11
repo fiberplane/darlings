@@ -50,7 +50,10 @@ export async function mutateViaReflection(
 		// Build other tool descriptions for context
 		const otherTools = candidate.tools
 			.filter((t) => t.name !== tool.name)
-			.map((t) => `- ${t.name}: "${t.description}"`)
+			.map(
+				(t) =>
+					`- ${t.name}: "${t.description}"\n  Schema: ${JSON.stringify(t.inputSchema)}`,
+			)
 			.join("\n");
 
 		// Ask LLM to make description more concise
@@ -59,6 +62,7 @@ export async function mutateViaReflection(
 Current tool:
 Name: ${tool.name}
 Description: "${tool.description}"
+Input Schema: ${JSON.stringify(tool.inputSchema, null, 2)}
 
 Other available tools:
 ${otherTools}
@@ -68,6 +72,7 @@ Your task: Make this description MORE CONCISE while maintaining the same meaning
 
 Requirements:
 - Keep the exact same functionality and use case
+- The input schema shows what parameters this tool accepts - use this to understand what it does
 - Remove redundant words and phrases
 - Use shorter, clearer language
 - Maintain distinction from other tools
@@ -162,7 +167,10 @@ Return ONLY the new concise description, no explanation or quotes.`;
 	// Build other tool descriptions for context
 	const otherTools = candidate.tools
 		.filter((t) => t.name !== tool.name)
-		.map((t) => `- ${t.name}: "${t.description}"`)
+		.map(
+			(t) =>
+				`- ${t.name}: "${t.description}"\n  Schema: ${JSON.stringify(t.inputSchema)}`,
+		)
 		.join("\n");
 
 	// Ask LLM to reflect and improve description
@@ -171,6 +179,7 @@ Return ONLY the new concise description, no explanation or quotes.`;
 Current tool:
 Name: ${tool.name}
 Description: "${tool.description}"
+Input Schema: ${JSON.stringify(tool.inputSchema, null, 2)}
 
 Other available tools:
 ${otherTools}
@@ -180,12 +189,15 @@ This description caused a failure:
 - Expected tool: ${failure.expectedTool}
 - LLM selected: ${failure.selectedTool || "none"}
 
+The input schema shows what parameters this tool accepts. Use this to understand what distinguishes this tool from others.
+
 Rewrite ONLY the description for "${tool.name}" to fix this issue.
 Requirements:
 - Keep it concise (under 200 characters)
-- Make the use case more specific
-- Distinguish it clearly from other tools
-- Focus on WHEN to use this tool
+- Make the use case more specific based on the input parameters
+- Distinguish it clearly from other tools (check their schemas too)
+- Focus on WHEN to use this tool and what it does
+- Use the schema to inform your description - what can this tool do that others can't?
 
 Return ONLY the new description, no explanation or quotes.`;
 

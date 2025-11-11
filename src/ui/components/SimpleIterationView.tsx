@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { ProgressEvent } from "../../types";
 import type { CandidateData } from "../queries";
 import { Badge } from "./badge";
@@ -94,7 +94,7 @@ export function SimpleIterationView({
 	liveCandidates,
 	currentlyEvaluatingId,
 }: SimpleIterationViewProps) {
-	const iterations = buildIterations(events);
+	const iterations = useMemo(() => buildIterations(events), [events]);
 	const [selectedIter, setSelectedIter] = useState<number | null>(null);
 
 	const selected = iterations.find((i) => i.number === selectedIter);

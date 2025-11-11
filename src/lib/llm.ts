@@ -85,6 +85,7 @@ export async function evaluateWithTools(
 			model: modelProviders[model],
 			messages: [{ role: "user", content: query }],
 			tools: neuteredTools,
+			temperature: 0, // Deterministic evaluation for consistent results
 		});
 
 		// Extract tool call from response

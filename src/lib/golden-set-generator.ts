@@ -60,7 +60,7 @@ export async function generateGoldenTestSet(
 				{
 					id: crypto.randomUUID(),
 					toolId: tool.id,
-					query: `I need help with ${tool.description.split(".")[0].toLowerCase()}`,
+					query: `I need help with ${(tool.description.split(".")[0] ?? tool.description).toLowerCase()}`,
 					expectedTool: tool.name,
 					userCreated: false,
 					invocationType: "indirect",

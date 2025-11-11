@@ -96,22 +96,18 @@ function dominatesOnTask(
 /**
  * Select parent using weighted sampling based on dominance count
  * Candidates that dominate on more tasks have higher selection probability
+ * Temperature controls exploration: higher = more uniform, lower = more greedy
  */
 export function selectParentWeighted(
 	pareto: PerTaskPareto,
 	archive: Archive,
+	temperature = 1.0,
 ): EvaluatedCandidate | null {
-	const samplingList: string[] = [];
-	for (const [candidateId, frequency] of Array.from(
-		pareto.dominanceCount.entries(),
-	)) {
-		if (frequency === 0) continue;
-		for (let i = 0; i < frequency; i++) {
-			samplingList.push(candidateId);
-		}
-	}
+	const candidatesWithCounts = Array.from(pareto.dominanceCount.entries())
+		.filter(([_id, count]) => count > 0)
+		.map(([id, count]) => ({ id, count }));
 
-	if (samplingList.length === 0) {
+	if (candidatesWithCounts.length === 0) {
 		// Fallback: random from archive
 		const candidates = Array.from(archive.candidates.keys());
 		if (candidates.length === 0) return null;
@@ -121,9 +117,32 @@ export function selectParentWeighted(
 		return selected ?? null;
 	}
 
-	const selectedId =
-		samplingList[Math.floor(Math.random() * samplingList.length)];
-	if (!selectedId) return null;
-	const selected = archive.candidates.get(selectedId);
-	return selected ?? null;
+	// Apply temperature to dominance counts
+	// temperature = 1.0: linear weighting (original behavior)
+	// temperature > 1.0: more exploration (flatter distribution)
+	// temperature < 1.0: more exploitation (sharper distribution)
+	const weights = candidatesWithCounts.map(({ count }) =>
+		Math.exp(count / temperature),
+	);
+	const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+
+	// Sample using cumulative probabilities
+	const rand = Math.random() * totalWeight;
+	let cumulative = 0;
+	for (let i = 0; i < candidatesWithCounts.length; i++) {
+		const weight = weights[i];
+		const candidate = candidatesWithCounts[i];
+		if (weight === undefined || candidate === undefined) continue;
+
+		cumulative += weight;
+		if (rand <= cumulative) {
+			const selected = archive.candidates.get(candidate.id);
+			return selected ?? null;
+		}
+	}
+
+	// Fallback (shouldn't reach here, but just in case)
+	const lastCandidate = candidatesWithCounts[candidatesWithCounts.length - 1];
+	if (!lastCandidate) return null;
+	return archive.candidates.get(lastCandidate.id) ?? null;
 }

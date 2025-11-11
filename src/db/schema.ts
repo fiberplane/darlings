@@ -71,10 +71,14 @@ export const candidates = sqliteTable("candidates", {
 
 export const evaluations = sqliteTable("evaluations", {
 	id: text("id").primaryKey(),
-	candidateId: text("candidate_id").references(() => candidates.id),
+	candidateId: text("candidate_id").references(() => candidates.id).notNull(),
 	testCaseId: text("test_case_id").references(() => testCases.id),
 	selectedTool: text("selected_tool"),
+	expectedTool: text("expected_tool"),
 	correct: integer("correct", { mode: "boolean" }).notNull(),
+	timestamp: integer("timestamp", { mode: "timestamp" }),
+	// Nullable for full evaluations, set for subsample evaluations
+	iterationId: text("iteration_id").references(() => iterations.id),
 });
 
 export const events = sqliteTable("events", {
@@ -99,16 +103,4 @@ export const iterations = sqliteTable("iterations", {
 	startedAt: integer("started_at", { mode: "timestamp" }).notNull(),
 	completedAt: integer("completed_at", { mode: "timestamp" }),
 	totalEvaluations: integer("total_evaluations"), // Running count of evaluations
-});
-
-// Subsample evaluations - captures test results during subsample phase
-export const subsampleEvaluations = sqliteTable("subsample_evaluations", {
-	id: text("id").primaryKey(),
-	iterationId: text("iteration_id").references(() => iterations.id).notNull(),
-	candidateId: text("candidate_id").references(() => candidates.id).notNull(),
-	testCaseId: text("test_case_id").references(() => testCases.id).notNull(),
-	selectedTool: text("selected_tool"),
-	expectedTool: text("expected_tool").notNull(),
-	correct: integer("correct", { mode: "boolean" }).notNull(),
-	timestamp: integer("timestamp", { mode: "timestamp" }).notNull(),
 });

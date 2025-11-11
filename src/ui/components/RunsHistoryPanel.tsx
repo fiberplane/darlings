@@ -108,8 +108,12 @@ export function RunsHistoryPanel({
 								</span>
 							</div>
 							<div className="flex justify-between">
-								<span className="text-muted-foreground">Model:</span>
-								<span className="font-medium">{config.model}</span>
+								<span className="text-muted-foreground">Eval Model:</span>
+								<span className="font-medium">{config.evaluationModel}</span>
+							</div>
+							<div className="flex justify-between">
+								<span className="text-muted-foreground">Gen Model:</span>
+								<span className="font-medium">{config.generationModel}</span>
 							</div>
 							<div className="flex justify-between">
 								<span className="text-muted-foreground">Budget:</span>

@@ -64,8 +64,13 @@ export type OptimizationConfig = {
 	testsPerTool: number; // Auto-generated tests (default: 5) - GEPA only
 	testCasesPerCategory?: number; // Golden optimizer: test cases per category (default: 10)
 	candidateCount?: number; // Golden optimizer: number of candidates (default: 10)
-	model: ModelName; // LLM to use
+	evaluationModel: ModelName; // LLM to use for evaluations
+	generationModel: ModelName; // LLM to use for reflection and test generation
 	maxConcurrentEvaluations: number; // Concurrent evaluations (default: 3)
+	// GEPA multi-objective parameters
+	minAccuracy?: number; // Minimum accuracy threshold 0-1 (default: 0, no minimum)
+	accuracyWeight?: number; // Balance: 0=all conciseness, 1=all accuracy (default: 0.5)
+	selectionTemperature?: number; // Exploration: higher=more exploration (default: 1.0)
 };
 
 // GEPA Configuration (replaces iterations/populationSize with budget-based approach)
@@ -74,17 +79,23 @@ export type GEPAConfig = {
 	maxEvaluations: number; // Total LLM call budget (default: 500)
 	subsampleSize: number; // Cheap filter size (default: 5)
 	testsPerTool: number; // Auto-generated tests (same as before)
-	model: ModelName; // LLM to use
+	evaluationModel: ModelName; // LLM to use for evaluations
+	generationModel: ModelName; // LLM to use for reflection and test generation
 	maxConcurrentEvaluations: number; // Rate limiting
 	tools: Tool[];
 	testCases: TestCase[];
 	onProgress: (event: ProgressEvent) => void;
+	// Multi-objective parameters
+	minAccuracy?: number; // Minimum accuracy threshold 0-1 (default: 0)
+	accuracyWeight?: number; // Balance: 0=all conciseness, 1=all accuracy (default: 0.5)
+	selectionTemperature?: number; // Exploration: higher=more exploration (default: 1.0)
 };
 
 // Golden Optimizer Configuration
 export type GoldenOptimizerConfig = {
 	runId: string;
-	model: ModelName;
+	evaluationModel: ModelName;
+	generationModel: ModelName;
 	maxConcurrentEvaluations: number;
 	tools: Tool[];
 	testCasesPerCategory: number; // Number of direct/indirect/negative test cases to generate (default: 10)

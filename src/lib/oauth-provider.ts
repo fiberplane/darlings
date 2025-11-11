@@ -1,10 +1,10 @@
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
 	AuthorizationServerMetadata,
 	OAuthClientInformation,
 	OAuthClientMetadata,
-	OAuthClientProvider,
 	OAuthTokens,
-} from "@modelcontextprotocol/sdk/client/auth.js";
+} from "@modelcontextprotocol/sdk/shared/auth.js";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 import * as schema from "../db/schema";

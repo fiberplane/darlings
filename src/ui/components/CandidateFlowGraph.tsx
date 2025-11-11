@@ -18,7 +18,7 @@ import type { CandidateData } from "../queries";
 import { Badge } from "./badge";
 
 // Types
-interface CandidateNodeData {
+interface CandidateNodeData extends Record<string, unknown> {
 	iteration: number;
 	accuracy: number;
 	avgDescriptionLength: number;
@@ -299,7 +299,7 @@ export function CandidateFlowGraph({
 }: CandidateFlowGraphProps) {
 	const [nodes, setNodes, onNodesChange] =
 		useNodesState<CandidateNode>([]);
-	const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+	const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
 	// Convert candidates to nodes and edges
 	const { rawNodes, rawEdges } = useMemo(() => {
@@ -345,7 +345,12 @@ export function CandidateFlowGraph({
 		return { rawNodes, rawEdges };
 	}, [candidates, liveMode, currentlyEvaluatingId]);
 
-	// Apply layout when candidates change
+	// Apply layout when candidates structure changes (new candidates added, not just prop updates)
+	const candidateSignature = useMemo(
+		() => candidates.map(c => `${c.id}-${c.parentId}-${c.rejected}`).join('|'),
+		[candidates]
+	);
+
 	useEffect(() => {
 		if (rawNodes.length === 0) return;
 
@@ -354,9 +359,10 @@ export function CandidateFlowGraph({
 			rawEdges,
 		);
 
-		setNodes(layoutedNodes);
+		setNodes(layoutedNodes as CandidateNode[]);
 		setEdges(layoutedEdges);
-	}, [rawNodes, rawEdges, setNodes, setEdges]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [candidateSignature]);
 
 	// Toggle node expansion (doesn't trigger re-layout since expanded content is absolutely positioned)
 	const onNodeClick = useCallback(

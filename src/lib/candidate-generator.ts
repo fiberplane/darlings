@@ -44,6 +44,7 @@ export async function generateCandidates(
 	// Generate N-1 variations (since we already have baseline)
 	for (let i = 0; i < count - 1; i++) {
 		const variationType = variationTypes[i % variationTypes.length];
+		if (!variationType) continue; // Should never happen, but satisfies TS
 
 		try {
 			const candidate = await generateVariation(
@@ -123,7 +124,10 @@ function buildVariationPrompt(
 ): string {
 	const otherTools = allTools
 		.filter((t) => t.id !== tool.id)
-		.map((t) => `- ${t.name}: "${t.description}"`)
+		.map(
+			(t) =>
+				`- ${t.name}: "${t.description}"\n  Schema: ${JSON.stringify(t.inputSchema)}`,
+		)
 		.join("\n");
 
 	const baseContext = `You are optimizing tool descriptions for an LLM function calling system.
@@ -133,8 +137,10 @@ Name: ${tool.name}
 Description: "${tool.description}"
 Input Schema: ${JSON.stringify(tool.inputSchema, null, 2)}
 
-Other available tools:
-${otherTools}`;
+Other available tools (with their schemas):
+${otherTools}
+
+Use the input schemas to understand what makes each tool unique and what parameters they accept.`;
 
 	switch (variationType) {
 		case "clarity":
