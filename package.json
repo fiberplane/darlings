@@ -10,6 +10,7 @@
 		"typecheck": "tsgo --noEmit",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "bun run scripts/migrate.ts",
+		"db:start": "bun db:generate && bun db:migrate",
 		"db:studio": "drizzle-kit studio",
 		"start": "bun run src/server.ts"
 	},

@@ -1,320 +1,177 @@
-# MCP Tool Description Optimizer
+# Tool Description Optimizer
 
-A web application for optimizing MCP (Model Context Protocol) tool descriptions using the GEPA (Genetic-Pareto) algorithm with LLM reflection.
+> ![NOTE]
+> This is a **research project**. We will not be adding features, fixing the numerous bugs, or porting it to other platforms. If you break it you can keep both halves.
 
-## Overview
+Evolutionary optimization of tool descriptions for LLM function calling using the GEPA (Genetic-Pareto) algorithm.
 
-This tool helps improve tool descriptions for MCP servers by:
-1. Connecting to an MCP server and loading its tools
-2. Generating test cases for each tool
-3. Running an evolutionary optimization loop that uses LLM reflection to iteratively improve descriptions
-4. Displaying real-time progress and Pareto-optimal solutions
+## Problem
 
-### Key Features
+LLMs select tools based on their descriptions. Poor descriptions lead to incorrect tool selection. This optimizer automatically improves descriptions through iterative testing and LLM-guided refinement.
 
-- **GEPA Algorithm**: Genetic-Pareto evolutionary optimization with LLM reflection
-- **Multi-Model Support**: Latest Claude, GPT, Kimi, and Qwen models
-- **Real-time UI**: Live activity feed with SSE streaming
-- **Pareto Front**: Visualize tradeoffs between accuracy and description complexity
-- **Persistent Storage**: SQLite database with Drizzle ORM
+## How GEPA Works
 
-## Technology Stack
+GEPA is an evolutionary algorithm that optimizes tool descriptions across two objectives: accuracy (correct tool selection) and conciseness (shorter descriptions).
 
-- **Runtime**: Bun 1.3+
-- **Backend**: Bun.serve() with native routing
-- **Frontend**: Preact
-- **Database**: SQLite (via Bun's built-in support) + Drizzle ORM
-- **AI**: Vercel AI SDK with multiple providers
-- **MCP**: Model Context Protocol SDK
+### Process
 
-## Prerequisites
+1. **Generate test cases** - LLM creates queries that should trigger each tool
+2. **Evaluate baseline** - Test original descriptions against all queries
+3. **Evolution loop** - Until budget exhausted:
+   - **Select parent**: Probabilistic selection weighted by dominance count (how many test cases this candidate is best at)
+   - **Mutate**: LLM analyzes one random failure and rewrites that tool's description to fix it
+   - **Subsample filter**: Test offspring on 5 random cases, reject if accuracy drops
+   - **Full evaluation**: If passed subsample, test on all cases
+   - **Archive**: Add offspring to unbounded archive, update per-task Pareto fronts
+4. **Return results** - All candidates stored, best selected from Pareto front
 
-- [Bun](https://bun.sh) v1.3 or later
-- API keys for at least one LLM provider:
-  - Anthropic (Claude models)
-  - OpenAI (GPT models)
-  - Moonshot AI (Kimi models)
-  - Alibaba Dashscope (Qwen models)
+### Key Mechanisms
+
+**Parent-Offspring**:
+- Parent is selected from archive (weighted random based on performance)
+- Offspring is created by mutating ONE tool description in parent
+- Both coexist in archive independently
+- Lineage tracked via `parentOf` map
+
+**Mutation strategies**:
+- If candidate has failures: Pick random failure, ask LLM to fix that tool's description
+- If candidate perfect (100% accuracy): Pick random tool, ask LLM to make it more concise
+
+**Per-task Pareto fronts**:
+- Each test case maintains its own Pareto front
+- Candidate is on a front if: correct answer OR (correct + shorter than others)
+- Dominance count = number of test cases where candidate is on front
+- Drives parent selection probability
+
+**Subsample filtering**:
+- Evaluate offspring on 5 random tests first
+- Only do full evaluation (15+ tests) if subsample shows improvement
+- Saves ~70% of LLM call budget
 
 ## Installation
 
-1. **Clone and install dependencies:**
-
 ```bash
-cd mcp-tool-optimizer
 bun install
-```
-
-2. **Configure environment variables:**
-
-```bash
 cp .env.example .env
-```
-
-Edit `.env` and add your API keys:
-
-```env
-# Required: At least one API key
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
-MOONSHOT_API_KEY=...
-DASHSCOPE_API_KEY=...
-
-# Optional
-DATABASE_URL=optimizer.db
-PORT=3000
-```
-
-3. **Initialize database:**
-
-```bash
-bun run db:push
-```
-
-4. **Build frontend:**
-
-```bash
+# Add ANTHROPIC_API_KEY or OPENAI_API_KEY to .env
+bun run db:start
 bun run build
-```
-
-5. **Start the server:**
-
-```bash
 bun run dev
 ```
 
-Open http://localhost:3000 in your browser.
+Open http://localhost:3000
 
 ## Usage
 
-### 1. Connect to an MCP Server
+1. **Connect to MCP server** - Load tools from any MCP server (stdio or HTTP)
+2. **Generate test cases** - Create queries for each tool (default: 5 per tool)
+3. **Configure optimizer** - Set budget (max evaluations), models, subsample size
+4. **Run optimization** - Watch real-time progress via Server-Sent Events
+5. **View results** - Pareto front shows accuracy vs conciseness tradeoffs
 
-**Stdio Example:**
-- Server Name: `weather-mcp`
-- Connection Type: `stdio`
-- Command: `node`
-- Arguments: `path/to/mcp-server.js`
+## Configuration
 
-**HTTP Example:**
-- Server Name: `api-server`
-- Connection Type: `HTTP`
-- URL: `http://localhost:8080`
+**GEPA config** (`src/types.ts`):
+```typescript
+{
+  maxEvaluations: 500,           // Budget (stop after N LLM calls)
+  subsampleSize: 5,              // Cheap filter before full eval
+  maxConcurrentEvaluations: 3,   // Rate limit
+  evaluationModel: "claude-sonnet-4-5",
+  generationModel: "claude-sonnet-4-5",
+  minAccuracy: 0.7,              // Reject if below threshold
+  selectionTemperature: 1.0      // 0.1=exploit, 5.0=explore
+}
+```
 
-Click **Connect to MCP Server** to load tools.
+**Golden Set Optimizer** (alternative exhaustive approach):
+- Generates all candidates upfront (10 variations per tool)
+- Evaluates all combinations exhaustively
+- Tests include direct, indirect, and negative invocations
+- No evolution, just brute force + best selection
 
-### 2. Generate Test Cases
+## LLM Call Budget
 
-1. Select the connected server
-2. Adjust "Tests Per Tool" (default: 5)
-3. Click **Generate Test Cases**
+**GEPA** (default config: 3 tools, 15 tests, 50 iterations, 30% acceptance):
+```
+Test generation:     3 calls (1 per tool)
+Initial eval:        15 calls (1 per test)
+Iterations:          50 × (1 mutation + 5 subsample + 0.3×15 full) = 525 calls
+Total:               ~543 LLM calls
+```
 
-The system will use the selected LLM to generate diverse queries for each tool.
-
-### 3. Configure Optimization
-
-- **Iterations**: Number of GEPA generations (default: 10)
-- **Population Size**: Candidates per generation (default: 8)
-- **Model**: Choose LLM for evaluation and reflection
-- **Tests Per Tool**: Number of test cases per tool
-
-### 4. Run Optimization
-
-Click **Start Optimization** to begin. The Activity Feed will show:
-- Each test case evaluation (✓ success / ✗ failure)
-- LLM reflection on failures
-- Tool description mutations
-- Pareto front updates
-
-### 5. View Results
-
-The Metrics Panel displays:
-- **Best Accuracy**: Highest achieved accuracy
-- **Pareto Front**: Non-dominated solutions (accuracy vs complexity)
-- **Progress**: Accuracy improvement over generations
-
-## Model Selection
-
-### Recommended Models
-
-| Tier | Model | Best For |
-|------|-------|----------|
-| **Premium** | `claude-sonnet-4-5` | Best overall quality |
-| | `gpt-5` | OpenAI flagship |
-| | `claude-opus-4-1` | Maximum reasoning |
-| **Balanced** | `claude-sonnet-4` | Proven reliability |
-| | `gpt-4o` | Fast and accurate |
-| | `qwq-32b-preview` | Reasoning at lower cost |
-| **Fast** | `kimi-v1.5` | Rapid iteration |
-| | `qwen-turbo` | Cost-effective |
-
-### Available Models
-
-**Claude (Anthropic)**
-- `claude-sonnet-4-5` - Latest Sonnet (Nov 2025)
-- `claude-opus-4-1` - Highest capability
-- `claude-haiku-4-5` - Fast and economical
-
-**OpenAI**
-- `gpt-5` - Latest flagship
-- `gpt-4o` - Recommended default
-- `o3-mini` - Enhanced reasoning
-
-**Kimi (Moonshot AI)**
-- `moonshot-v1-8k` - 8k context
-- `moonshot-v1-32k` - 32k context
-- `moonshot-v1-128k` - 128k context
-
-**Qwen (Alibaba)**
-- `qwen-turbo` - Fast
-- `qwen-plus` - Balanced
-- `qwen-max` - Highest quality
-- `qwq-32b-preview` - Reasoning model
+**Golden** (10 candidates, 3 tools, 27 tests):
+```
+Test generation:     3 calls
+Candidate gen:       27 calls (9 candidates × 3 tools)
+Evaluation:          270 calls (10 candidates × 27 tests)
+Total:               300 LLM calls
+```
 
 ## Architecture
 
-### Backend (`src/`)
-
 ```
 src/
-├── server.ts              # Bun.serve() with API routes
-├── types.ts               # Shared TypeScript types
-├── db/
-│   ├── schema.ts          # Drizzle schema
-│   └── index.ts           # Database connection
-└── lib/
-    ├── llm.ts             # Vercel AI SDK wrapper
-    ├── mcp-client.ts      # MCP connection handler
-    ├── test-generator.ts  # Auto-generate test cases
-    ├── evaluator.ts       # Test case evaluation
-    ├── mutator.ts         # LLM reflection mutations
-    └── optimizer.ts       # GEPA algorithm
+├── server.ts                  # Bun HTTP server + SSE streaming
+├── types.ts                   # Shared types
+├── lib/
+│   ├── gepa.ts               # Main GEPA algorithm
+│   ├── golden-optimizer.ts   # Alternative exhaustive optimizer
+│   ├── llm.ts                # LLM interface (Vercel AI SDK)
+│   ├── evaluator.ts          # Test case evaluation
+│   ├── mutator.ts            # LLM reflection + mutation
+│   ├── test-generator.ts     # Simple test case generation
+│   ├── golden-set-generator.ts # Comprehensive test generation
+│   ├── candidate-generator.ts  # Variation generation (Golden)
+│   ├── pareto.ts             # Pareto front logic + parent selection
+│   ├── archive.ts            # Candidate storage + lineage
+│   ├── subsample.ts          # Subsample filtering
+│   └── concurrency.ts        # Rate limiting (p-limit)
+└── ui/                        # Preact frontend
 ```
 
-### Frontend (`src/ui/`)
+## Models
 
-```
-src/ui/
-├── index.html             # Entry point
-├── client.tsx             # Main Preact app
-└── components/
-    ├── ConfigPanel.tsx    # MCP connection & settings
-    ├── ActivityFeed.tsx   # Real-time event stream
-    └── MetricsPanel.tsx   # Charts and statistics
-```
+Supports Claude (Anthropic), GPT (OpenAI) via Vercel AI SDK:
+- `claude-sonnet-4-5`, `claude-opus-4-1`, `claude-haiku-4-5`
+- `gpt-5`, `gpt-5-mini`, `gpt-4o`
 
-## GEPA Algorithm
+Evaluation uses `temperature: 0` for deterministic results.
 
-The Genetic-Pareto algorithm optimizes tool descriptions through:
+## Database
 
-1. **Initialization**: Start with original tool descriptions
-2. **Evaluation**: Test each candidate against all test cases
-3. **Pareto Selection**: Identify non-dominated solutions
-4. **Reflection**: LLM analyzes failures and suggests improvements
-5. **Mutation**: Update tool descriptions based on reflection
-6. **Iteration**: Repeat for configured number of generations
+SQLite with Drizzle ORM:
+- `mcp_servers` - Connected servers
+- `tools` - Tool definitions
+- `test_cases` - Generated + user tests
+- `optimization_runs` - Run metadata
+- `candidates` - Tool description variants
+- `evaluations` - Individual test results
+- `events` - SSE event log for replay
 
-### Objectives
+## API
 
-- **Maximize Accuracy**: Correct tool selection rate
-- **Minimize Complexity**: Average description length
+**MCP**:
+- `POST /api/mcp/connect` - Connect to server
+- `GET /api/mcp/tools?serverId={id}` - List tools
 
-The Pareto front contains all solutions where improving one objective would worsen the other.
+**Tests**:
+- `POST /api/tests/generate` - Generate test cases
+- `GET /api/tests?serverId={id}` - List tests
 
-## Database Schema
-
-- `mcp_servers`: Connected MCP servers
-- `tools`: Tools from each server
-- `test_cases`: Generated and user-created test cases
-- `optimization_runs`: Historical optimization runs
-- `candidates`: Tool description variants
-- `evaluations`: Individual test results
-- `events`: Real-time progress events (for replay)
+**Optimization**:
+- `POST /api/optimize/start` - Start run (SSE stream)
+- `GET /api/runs/{id}/events` - Replay events
 
 ## Development
 
-### Run in development mode:
-
 ```bash
-bun run dev
+bun run dev          # Start dev server
+bun run build        # Build frontend
+bun run db:push      # Apply schema changes
+bun run db:studio    # Open Drizzle Studio
 ```
-
-### Database management:
-
-```bash
-# Generate migrations
-bun run db:generate
-
-# Apply schema changes
-bun run db:push
-
-# Open Drizzle Studio
-bun run db:studio
-```
-
-### Build frontend:
-
-```bash
-bun run build
-```
-
-## API Endpoints
-
-### MCP Operations
-- `POST /api/mcp/connect` - Connect to MCP server
-- `GET /api/mcp/servers` - List connected servers
-- `GET /api/mcp/tools?serverId={id}` - List tools for server
-
-### Test Cases
-- `POST /api/tests/generate` - Generate test cases
-- `GET /api/tests?serverId={id}` - Get test cases
-- `POST /api/tests/add` - Add custom test case
-- `DELETE /api/tests/{id}` - Delete test case
-
-### Optimization
-- `POST /api/optimize/start` - Start optimization (SSE stream)
-- `POST /api/optimize/stop` - Stop running optimization
-- `GET /api/runs` - List optimization runs
-- `GET /api/runs/{id}/events` - Get events for run
-
-## Troubleshooting
-
-### "Failed to connect to MCP server"
-
-- Verify the command/arguments for stdio servers
-- Check that HTTP servers are running and accessible
-- Review MCP server logs for errors
-
-### "No test cases generated"
-
-- Ensure you have a valid API key configured
-- Try a different model (e.g., switch from Claude to GPT)
-- Check server logs for API errors
-
-### Frontend not loading
-
-- Run `bun run build` to rebuild
-- Check that dist/client.js exists
-- Verify port 3000 is not in use
-
-### Database errors
-
-- Delete `optimizer.db` and run `bun run db:push`
-- Check file permissions on the database file
 
 ## License
 
 MIT
-
-## Contributing
-
-Pull requests welcome! Please ensure:
-1. Code follows TypeScript best practices
-2. All tests pass
-3. Documentation is updated
-
-## Acknowledgments
-
-- Built with [Bun](https://bun.sh)
-- Powered by [Vercel AI SDK](https://sdk.vercel.ai)
-- Uses [Drizzle ORM](https://orm.drizzle.team)
-- Implements [Model Context Protocol](https://modelcontextprotocol.io)
